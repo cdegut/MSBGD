@@ -3,7 +3,8 @@ from modules.data_structures import MSData
 from modules.fitting_dpg import fitting_window
 from modules.matching_dpg import matching_window
 from modules.finding_dpg import finding_window
-from modules.dpg_draw import *
+#from modules.intialise import initialise_windows
+from modules.intialise import file_dialog
 from modules.rendercallback import RenderCallback
 from modules.dpg_style import create_styles
 
@@ -15,10 +16,10 @@ path = fr"D:\MassSpec\Um_2-1_1x.csv"
 
 def main():
     spectrum = MSData()
-    spectrum.import_csv(path)
     dpg.create_context()
     render_callback = RenderCallback(spectrum)
     create_styles()
+    file_dialog(render_callback)
 
     with dpg.window(label="Control", width=1430, height=-1, no_close=True, no_collapse=True, no_move=True, no_resize=True, no_title_bar=True, tag="Control"):
         dpg.set_primary_window( "Control", True)
@@ -26,17 +27,22 @@ def main():
         with dpg.child_window(height=40):           
             dpg.add_text(tracked=True, track_offset=1.0, tag="message_box")
         with dpg.tab_bar(label="Test", tag='tab_bar', pos=[500, 0]): # <- Not working
+            with dpg.tab(label="Home"):
+                dpg.add_button(label="Open file", callback=lambda: dpg.show_item("file_dialog_id"))
+
             with dpg.tab(label="Peak Finding"):
                 finding_window(render_callback)
             with dpg.tab(label="Fitting and deconvolution"):
                 fitting_window(render_callback)
+                pass
             with dpg.tab(label="Matching"):
                 matching_window(render_callback)  
+                pass
    
     dpg.bind_theme("general_theme")    
     
     ### Auto start ### delete for normal use
-    
+    '''
     dpg.set_value("L_data_clipping", 9500)
     dpg.set_value("R_data_clipping", 11700)
     dpg.set_value("peak_detection_threshold", 50)
@@ -61,11 +67,15 @@ def main():
     #dpg.focus_item("Peak matching")
     #dpg.show_style_editor()
     #dpg.show_metrics()
-
+    '''
     #####
-
+    dpg.create_viewport(title='Multi Bi Gaussian Fit', width=1450, height=1000, x_pos=0, y_pos=0)
     dpg.setup_dearpygui()
     dpg.show_viewport()
+    #spectrum.import_csv(path)
+    #initialise_windows(render_callback)
+
+    
 
     while(dpg.is_dearpygui_running()):
 

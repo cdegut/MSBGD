@@ -4,17 +4,15 @@ import pandas as pd
 import numpy as np
 from dataclasses import dataclass
 from modules.helpers import multi_bi_gaussian
-
 from typing import Dict, Tuple
-from time import time 
 
 # Define a class to store mass spectrometry data
 class MSData():
     def __init__(self):
-        self.original_data = None
-        self.working_data = None
-        self.baseline = None
-        self.baseline_corrected = None
+        self.original_data = [[],[]]
+        self.working_data = [[],[]]
+        self.baseline = [[],[]]
+        self.baseline_corrected = [[],[]]
         self.peaks: Dict[int : peak_params] = {}
         self.baseline_toggle = False
         self.baseline_need_update = False
@@ -57,17 +55,19 @@ class MSData():
     def request_baseline_update(self) -> None:
         self.baseline_need_update = True
     
-    def calculate_mbg(self, data_x: np.ndarray) -> np.ndarray:
+    def calculate_mbg(self, data_x: np.ndarray, fitting = False) -> np.ndarray:
         mbg_params = []
+
         for peak in self.peaks:
             if self.peaks[peak].do_not_fit:
                 continue
-            if self.peaks[peak].fitted:
+            
+            if fitting or self.peaks[peak].fitted:
                 mbg_params.append(self.peaks[peak].A_refined)
                 mbg_params.append(self.peaks[peak].x0_refined)
                 mbg_params.append(self.peaks[peak].sigma_L)
                 mbg_params.append(self.peaks[peak].sigma_R )
-            
+        
         mbg = multi_bi_gaussian(data_x, *mbg_params)
         return mbg
  
@@ -85,6 +85,7 @@ class peak_params:
     start_range: Tuple[int, int] = (0, 0)
     do_not_fit: bool = False
     user_added: bool = False
+    integral: float = 0
 
 if __name__ == "__main__":
     ms = MSData()

@@ -1,18 +1,19 @@
 import dearpygui.dearpygui as dpg
 
 dpg.create_context()
-dpg.create_viewport(title='Custom Title', width=900, height=800)
-window = dpg.window( label="------", width=900, height=800, tag="Primary Window" )
 
-with window as main_win:
-	with dpg.tab_bar(label="Test", tag='tab_bar', pos=[500, 0]): # <- Not working
-		with dpg.tab(label="Test Setup"):
-			dpg.add_text('Testing 1')
-		with dpg.tab(label="Monitoring"):
-			dpg.add_text('Testing 2')
-	
-dpg.set_item_pos('tab_bar', [100, 100]) # <- Not working
+def callback(sender, app_data, user_data):
+    print("Sender: ", sender)
+    print("App Data: ", app_data)
+    print(f"Path: {app_data['file_path_name']}")
 
+with dpg.file_dialog(directory_selector=False, show=False, callback=callback, id="file_dialog_id", width=700 ,height=400):
+    dpg.add_file_extension(".csv", color=(0, 255, 0, 255), custom_text="[csv]")
+
+with dpg.window(label="Tutorial", width=800, height=300):
+    dpg.add_button(label="File Selector", callback=lambda: dpg.show_item("file_dialog_id"))
+
+dpg.create_viewport(title='Custom Title', width=800, height=600)
 dpg.setup_dearpygui()
 dpg.show_viewport()
 dpg.start_dearpygui()

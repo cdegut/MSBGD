@@ -11,7 +11,7 @@ def matching_window(render_callback:RenderCallback):
             # Add x and y axes
             dpg.add_plot_axis(dpg.mvXAxis, label="m/z", tag="x_axis_plot3")
             dpg.add_plot_axis(dpg.mvYAxis, label="Y Axis", tag="y_axis_plot3")
-            dpg.add_line_series(spectrum.baseline_corrected[:,0], spectrum.baseline_corrected[:,1], label="Corrected Data Series", parent="y_axis_plot3", tag="corrected_series_plot3")
+            dpg.add_line_series([], [], label="Corrected Data Series", parent="y_axis_plot3", tag="corrected_series_plot3")
             dpg.add_line_series([], [], label="MBG", parent="y_axis_plot3", tag="MBG_plot3", show=False)
         with dpg.group(horizontal=True, horizontal_spacing= 25):
             with dpg.group(horizontal=False):
