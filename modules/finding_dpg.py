@@ -19,7 +19,7 @@ def finding_window(render_callback):
                        
             dpg.add_line_series([], [], label="Original Data Series", parent=y_axis, tag="original_series")
             dpg.add_line_series([], [], label="Filtered Data Series", parent=y_axis, tag="filtered_series")
-            dpg.add_line_series([], [], label="Snip Baseline", parent=y_axis, tag="baseline", show=False)  
+            dpg.add_line_series([], [], label="Snip Baseline", parent=y_axis, tag="baseline")  
             dpg.add_line_series([], [], label="Fitting Residual", parent=y_axis, tag="fitting_residual_plot1", show=False)  
         
         with dpg.group(horizontal=True, horizontal_spacing= 50):
@@ -30,7 +30,7 @@ def finding_window(render_callback):
                 dpg.add_text("")
                 dpg.add_text("Baseline estimation:")
                 with dpg.group(horizontal=True, horizontal_spacing= 50):
-                    dpg.add_checkbox(label="Baseline", callback=toggle_baseline, user_data=spectrum)
+                    dpg.add_checkbox(label="Correct baseline", callback=toggle_baseline, user_data=spectrum)
                     dpg.add_button(label="Update Baseline",  callback=spectrum.request_baseline_update, user_data=spectrum)
                 dpg.add_text("Baseline window:") 
                 dpg.add_slider_int(label="", default_value=500, min_value=10, max_value=2000, width=250, callback=spectrum.request_baseline_update, user_data=spectrum, tag="baseline_window")

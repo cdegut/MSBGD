@@ -9,10 +9,11 @@ from modules.rendercallback import RenderCallback
 from modules.dpg_style import create_styles
 
 
-path = fr"D:\MassSpec\Um_2-1_1x.csv"
+#path = fr"D:\MassSpec\Um_2-1_1x.csv"
 #path = fr"D:\MassSpec\Um_data.csv"
 #path = fr"D:\MassSpec\CS_RBC_alone.csv"
 #path = fr"D:\MassSpec\CR_aloneCID.csv"
+
 
 def main():
     spectrum = MSData()
@@ -29,6 +30,7 @@ def main():
         with dpg.tab_bar(label="Test", tag='tab_bar', pos=[500, 0]): # <- Not working
             with dpg.tab(label="Home"):
                 dpg.add_button(label="Open file", callback=lambda: dpg.show_item("file_dialog_id"))
+                dpg.add_loading_indicator(label="Loading", tag="file_loading_indicator", show=False)
 
             with dpg.tab(label="Peak Finding"):
                 finding_window(render_callback)

@@ -19,12 +19,13 @@ class MSData():
         
            
     def import_csv(self, path:str):
-        data = pd.read_csv(path)
+        return True
+    
+    def initialise_dataframe(self, data:np.ndarray):
         data = data.dropna()
         self.original_data = data.to_numpy()
         self.working_data = self.original_data
         self.correct_baseline(0)
-        return True
     
     def clip_data(self, L_clip:int, R_clip:int):
         self.working_data = self.original_data[(self.original_data[:,0] > L_clip) & (self.original_data[:,0] < R_clip)]
