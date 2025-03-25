@@ -138,7 +138,7 @@ def redraw_blocks(render_callback:RenderCallback):
                     #dpg.delete_item(f"peak_annotation_matching_{k}_{z_mz[0]}")
                     if not dpg.does_alias_exist(f"peak_annotation_matching_{k}_{z_mz[0]}"):
                         x0_fit = spectrum.peaks[peak].x0_refined
-                        y_mbg = spectrum.calculate_mbg([x0_fit])
+                        y_mbg = spectrum.calculate_mbg(x0_fit)
                         dpg.add_plot_annotation(label=f"{z_mz[0]}+", default_value=(x0_fit, y_mbg), offset=(15, -15), color=color, clamped=False, parent="peak_matching_plot", tag=f"peak_annotation_matching_{k}_{z_mz[0]}")
 
     # Draw the line annotations of unmatched peaks      
