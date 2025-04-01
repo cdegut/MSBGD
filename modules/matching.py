@@ -30,10 +30,12 @@ def draw_mz_lines(sender = None, app_data = None, user_data:Tuple[MSData,int] = 
         if alias.startswith(f"mz_lines_{k}"):
             dpg.delete_item(alias)
 
+    i = 0
     for line in mz_l:
         center_slice = render_callback.spectrum.baseline_corrected[:,1][(render_callback.spectrum.baseline_corrected[:,0] > line - 0.5) & (render_callback.spectrum.baseline_corrected[:,0] < line + 0.5)]
         max_y = max(center_slice) if len(center_slice) > 0 else 0
-        dpg.draw_line((line, -50), (line, max_y), parent="peak_matching_plot", tag=f"mz_lines_{k}_{line}", color=colors_list[k], thickness=1)
+        dpg.draw_line((line, -50), (line, max_y), parent="peak_matching_plot", tag=f"mz_lines_{k}_{z_l[i]}", color=colors_list[k], thickness=1)
+        i += 1
 
     update_theorical_peak_table(k, mz_l, z_l)
     render_callback.mz_lines[k] = z_mz
@@ -107,6 +109,7 @@ def draw_mbg(sender = None, app_data = None, user_data:RenderCallback = None):
          
 def redraw_blocks(render_callback:RenderCallback):
     spectrum = render_callback.spectrum
+    block_height = max(spectrum.baseline_corrected[:,1])  /20
 
     # Delete previous peaks and anotation
     for alias in dpg.get_aliases():
@@ -122,18 +125,23 @@ def redraw_blocks(render_callback:RenderCallback):
         thick = start10pcs - start1pcs
 
         # non matched blocks
-        dpg.draw_line((mid, 25), (mid, -25), parent="peak_matching_plot", color=(246, 32, 24,128), thickness=thick, tag=f"fitted_peak_matching_{peak}")
+        dpg.draw_line((mid, block_height), (mid, -25), parent="peak_matching_plot", color=(246, 32, 24,128), thickness=thick, tag=f"fitted_peak_matching_{peak}")
         dpg.add_plot_annotation(label=f"Peak {peak}", default_value=(mid, 0), offset=(15, 15), color=(100, 100, 100), clamped=False, parent="peak_matching_plot", tag=f"peak_annotation_matching_{peak}_gray")
 
         for k in range(0, len(render_callback.mz_lines)):
             mz_lines = render_callback.mz_lines[k]
             color = colors_list[k]
+            transparent_color = list(color)
+            transparent_color.append(100)
+            transparent_color = tuple(transparent_color)
 
             # find matched blocks
             for z_mz in mz_lines:
                 if z_mz[1] > start1pcs and z_mz[1] < start10pcs:
                     dpg.delete_item(f"fitted_peak_matching_{peak}")
-                    dpg.draw_line((mid, 25), (mid, -25), parent="peak_matching_plot", color=color, thickness=thick, tag=f"fitted_peak_matching_{peak}")
+                    dpg.delete_item(f"mz_lines_{k}_{z_mz[0]}")
+                    dpg.draw_line((z_mz[1], -50), (z_mz[1], block_height*1.5), parent="peak_matching_plot", tag=f"mz_lines_{k}_{z_mz[0]}", color=colors_list[k], thickness=1)
+                    dpg.draw_line((mid, block_height), (mid, -25), parent="peak_matching_plot", color=transparent_color, thickness=thick, tag=f"fitted_peak_matching_{peak}")
                     
                     #dpg.delete_item(f"peak_annotation_matching_{k}_{z_mz[0]}")
                     if not dpg.does_alias_exist(f"peak_annotation_matching_{k}_{z_mz[0]}"):

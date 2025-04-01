@@ -17,8 +17,8 @@ def matching_window(render_callback:RenderCallback):
             with dpg.group(horizontal=False):
                 dpg.add_button(label="Show fitted peaks", callback=update_peak_starting_points, user_data=render_callback)
                 dpg.add_text("Peaks Start:")
-                dpg.add_input_int(label="Lower  %", default_value=1,min_value=1 , max_value=100, tag="lower_bound", width=100)
-                dpg.add_input_int(label="Upper  %", default_value=20, min_value=1 , max_value=100, tag="upper_bound", width=100)
+                dpg.add_input_float(label="Lower  %", default_value=1,min_value=0.1 , max_value=100, tag="lower_bound", width=100)
+                dpg.add_input_float(label="Upper  %", default_value=25, min_value=1 , max_value=100, tag="upper_bound", width=100)
                 dpg.add_checkbox(label="Show Centers instead", default_value=False, tag="show_centers", callback=update_peak_starting_points, user_data=render_callback)
                 dpg.add_input_int(label="Width", default_value=1, min_value=1 , max_value=100, tag="center_width", width=100)
                 dpg.add_button(label="Draw MBG", callback=draw_mbg, user_data=render_callback)

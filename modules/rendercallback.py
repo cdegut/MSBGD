@@ -11,6 +11,7 @@ class RenderCallback:
     last_baseline_corrected = time.time()
     baseline_correct_requested = False
     mz_lines = {}
+    stop_fitting = False
 
     def execute(self):
         now = time.time()
@@ -27,4 +28,5 @@ class RenderCallback:
         self.spectrum.correct_baseline(window)
         dpg.set_value("baseline", [self.spectrum.baseline[:,0].tolist(), self.spectrum.baseline[:,1].tolist()])
         dpg.set_value("corrected_series_plot2", [self.spectrum.baseline_corrected[:,0].tolist(), self.spectrum.baseline_corrected[:,1].tolist()])
+        dpg.set_value("corrected_series_plot3", [self.spectrum.baseline_corrected[:,0].tolist(), self.spectrum.baseline_corrected[:,1].tolist()])
         dpg.set_axis_limits("y_axis_plot2", min(self.spectrum.baseline_corrected[:,1]) - 1, max(self.spectrum.baseline_corrected[:,1]))

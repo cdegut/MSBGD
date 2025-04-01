@@ -33,7 +33,7 @@ class MSData():
     def get_filterd_data(self, window_length, polyorder=2):
         if window_length % 2 == 0:
             window_length += 1  # Ensure window_length is odd
-        filtered =  savgol_filter(self.working_data[:, 1], window_length=window_length, polyorder=polyorder)
+        filtered =  savgol_filter(self.working_data[:,1], window_length=window_length, polyorder=polyorder)
         return filtered.tolist()
 
     def correct_baseline(self, window):

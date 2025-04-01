@@ -1,6 +1,7 @@
 import dearpygui.dearpygui as dpg
 from modules.fitting import run_fitting
 from modules.fitting import draw_fitted_peaks
+from modules.rendercallback import RenderCallback
 
 def fitting_window(render_callback):
     spectrum = render_callback.spectrum
@@ -15,8 +16,12 @@ def fitting_window(render_callback):
 
         with dpg.group(horizontal=True, horizontal_spacing= 50):
             with dpg.group(horizontal=False):     
-                dpg.add_button(label="Windowed Multi Bi Gaussian Deconvolution",callback=run_fitting, user_data=spectrum)
-                dpg.add_checkbox(label="Use multithreading", default_value=True, tag="use_multithreading")
+                dpg.add_button(label="Windowed Multi Bi Gaussian Deconvolution",callback=run_fitting, user_data=render_callback)
+                dpg.add_button(label = "Stop Fitting", callback=stop_fitting , user_data=render_callback)
+
+                with dpg.group(horizontal=False):
+                    dpg.add_checkbox(label="Use multithreading", default_value=True, tag="use_multithreading")
+                    dpg.add_checkbox(label="Fit on filtered data", default_value=True, tag="use_filtered")
             dpg.add_loading_indicator(style=5,radius=3, show=False, tag="Fitting_indicator")
             dpg.add_text("", tag="Fitting_indicator_text")
         with dpg.group(horizontal=True, horizontal_spacing= 50):
@@ -35,6 +40,8 @@ def fitting_window(render_callback):
                 dpg.add_table_column(label="Peak Start")
                 dpg.add_table_column(label="Peak Apex")
                 dpg.add_table_column(label="Peak Integral")
+                dpg.add_table_column(label="Sigma Left")
+                dpg.add_table_column(label="Sigma Right")
 
     dpg.bind_item_theme("corrected_series_plot2", "data_theme")
     dpg.bind_item_theme("residual", "residual_theme")
@@ -46,3 +53,8 @@ def show_residual_callback(sender, app_data):
     else:
         dpg.hide_item("residual")
     return 
+
+def stop_fitting(sender, app_data, user_data:RenderCallback):
+    user_data.stop_fitting = True
+    print("Fitting stopped")
+    return

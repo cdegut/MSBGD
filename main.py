@@ -82,7 +82,7 @@ def main():
     while(dpg.is_dearpygui_running()):
 
         render_callback.execute()
-        dpg.render_dearpygui_frame()  
+        dpg.render_dearpygui_frame()
 
     dpg.destroy_context()
 

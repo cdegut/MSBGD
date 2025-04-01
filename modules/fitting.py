@@ -6,20 +6,24 @@ from scipy.integrate import quad
 import numpy as np
 from modules.intialise import log
 import threading
-import random
 import time
+from scipy.signal import savgol_filter
 
-def run_fitting(sender = None, app_data = None, user_data:MSData = None):
-    spectrum = user_data
+from modules.rendercallback import RenderCallback
+
+def run_fitting(sender = None, app_data = None, user_data:RenderCallback = None):
+    render_callback = user_data
     dpg.show_item("Fitting_indicator")
     k = dpg.get_value("fitting_iterations")
     std = dpg.get_value("fitting_std")
     if dpg.get_value("show_residual_checkbox"):
         dpg.show_item("residual")
-    rolling_window_fit(spectrum, k, std)
+    use_filtered= dpg.get_value("use_filtered")
+    user_data.stop_fitting = False
+    rolling_window_fit(render_callback, k, std, use_filtered)
     dpg.hide_item("Fitting_indicator")
 
-def initial_peaks_parameters(spectrum:MSData):
+def initial_peaks_parameters(spectrum:MSData, asymetry = 1.5):
     initial_params = []
     working_peak_list = []
     i = 0
@@ -42,7 +46,8 @@ def initial_peaks_parameters(spectrum:MSData):
             continue
 
         A_guess = spectrum.peaks[peak].A_init
-        sigma_L_guess = sigma_R_guess = spectrum.peaks[peak].width /2
+        sigma_L_guess =  spectrum.peaks[peak].width /2
+        sigma_R_guess = sigma_L_guess * asymetry
         initial_params.extend([A_guess, x0_guess, sigma_L_guess, sigma_R_guess])       
         working_peak_list.append(peak)
         i += 1
@@ -53,7 +58,8 @@ def initial_peaks_parameters(spectrum:MSData):
 
     return initial_params, working_peak_list
 
-def rolling_window_fit(spectrum:MSData, iterations = 1000, std =0.25):
+def rolling_window_fit(render_callback, iterations = 1000, std =0.25, use_filtered = True):
+    spectrum = render_callback.spectrum
     baseline_window = dpg.get_value("baseline_window")
     spectrum.correct_baseline(baseline_window)
     init = initial_peaks_parameters(spectrum)
@@ -75,7 +81,7 @@ def rolling_window_fit(spectrum:MSData, iterations = 1000, std =0.25):
         spectrum.peaks[peak].fitted = False
         i += 1
  
-    fit = refine_peak_parameters(working_peak_list, initial_params, spectrum, iterations, std)   
+    fit = refine_peak_parameters(working_peak_list, initial_params, render_callback, iterations, std , use_filtered = use_filtered)   
     if fit:
         log("Fitting done with no error")
     else:
@@ -88,8 +94,8 @@ def draw_residual(x_data, residual):
     dpg.show_item("residual")
     dpg.set_value("residual", [x_data, residual])
 
-def refine_peak_parameters(working_peak_list, mbg_params, spectrum:MSData, iterations=1000, std = 0.25):
-    
+def refine_peak_parameters(working_peak_list, mbg_params, render_callback:RenderCallback, iterations=1000, std = 0.25, use_filtered = True):
+    spectrum = render_callback.spectrum
     original_peaks: Tuple[int, peak_params] = {peak:spectrum.peaks[peak] for peak in working_peak_list}
     data_x = spectrum.working_data[:,0]
     data_y = spectrum.baseline_corrected[:,1]
@@ -97,10 +103,20 @@ def refine_peak_parameters(working_peak_list, mbg_params, spectrum:MSData, itera
     iterations_list = [i for i in range(len(working_peak_list))]
     start = time.time()
     
-    data_x = spectrum.baseline_corrected[:,0]
-    data_y = spectrum.baseline_corrected[:,1]
+    if use_filtered:
+        window_length = dpg.get_value("smoothing_window")
+        data_x = savgol_filter(spectrum.baseline_corrected[:,0], window_length=window_length, polyorder=2)
+        data_y = spectrum.baseline_corrected[:,1]
+    else:
+        data_x = spectrum.baseline_corrected[:,0]
+        data_y = spectrum.baseline_corrected[:,1]
+    
 
-    for k in range(iterations +1):  
+    for k in range(iterations +1):
+        render_callback.execute()
+        if render_callback.stop_fitting:
+            log("Fitting stopped by user")
+            break
         residual = data_y - spectrum.calculate_mbg(data_x,  fitting=True)
         
         if dpg.get_value("show_residual_checkbox"):
@@ -166,8 +182,8 @@ def _refine_iteration(peak:int, data_x, data_y, spectrum:MSData, original_peak):
             # Sharpen the peak
             L_window = original_peak.sigma_L
             R_window = original_peak.sigma_R       
-            L_mask = (data_x >= x0_fit - L_window) & (data_x <= x0_fit - L_window/4)
-            R_mask = (data_x >= x0_fit + R_window/4) & (data_x <= x0_fit + R_window)
+            L_mask = (data_x >= x0_fit - L_window) & (data_x <= x0_fit - L_window/2)
+            R_mask = (data_x >= x0_fit + R_window/2) & (data_x <= x0_fit + R_window)
 
             data_x_L = data_x[L_mask]
             data_y_L = data_y[L_mask]
@@ -273,8 +289,10 @@ def update_peak_table(spectrum:MSData):
         if not spectrum.peaks[peak].fitted:
             continue
         apex = spectrum.peaks[peak].x0_refined
-        start = apex - 3 * spectrum.peaks[peak].sigma_L
-        end = apex + 3 * spectrum.peaks[peak].sigma_R
+        sigma_L = spectrum.peaks[peak].sigma_L
+        sigma_R = spectrum.peaks[peak].sigma_R
+        start = apex - 3 * sigma_L
+        end = apex + 3 *  sigma_R
         integral = quad(bi_gaussian, start, end, args=(spectrum.peaks[peak].A_refined, spectrum.peaks[peak].x0_refined, spectrum.
         peaks[peak].sigma_L, spectrum.peaks[peak].sigma_R))[0]
         spectrum.peaks[peak].integral = integral
@@ -284,3 +302,5 @@ def update_peak_table(spectrum:MSData):
             dpg.add_text(f"{start:.2f}")
             dpg.add_text(f"{apex:.2f}")
             dpg.add_text(f"{integral:.2f}")
+            dpg.add_text(f"{sigma_L}")
+            dpg.add_text(f"{sigma_R}")
