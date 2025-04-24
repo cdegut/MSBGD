@@ -40,8 +40,8 @@ def main():
             with dpg.tab(label="Matching"):
                 matching_window(render_callback)  
                 pass
-   
-    dpg.bind_theme("general_theme")    
+                
+    dpg.bind_theme("light")
     
     ### Auto start ### delete for normal use
     '''
@@ -67,10 +67,11 @@ def main():
     #dpg.focus_item("Peak fitting")
     data_clipper(None, None, spectrum)
     #dpg.focus_item("Peak matching")
-    #dpg.show_style_editor()
+    dpg.show_style_editor()
     #dpg.show_metrics()
     '''
     #####
+    dpg.show_style_editor()
     dpg.create_viewport(title='Multi Bi Gaussian Fit', width=1450, height=1000, x_pos=0, y_pos=0)
     dpg.setup_dearpygui()
     dpg.show_viewport()
