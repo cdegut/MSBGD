@@ -1,6 +1,6 @@
 import dearpygui.dearpygui as dpg
 from modules.rendercallback import RenderCallback
-from modules.matching import draw_mz_lines, update_peak_starting_points, draw_mbg
+from modules.matching import draw_mz_lines, update_peak_starting_points, draw_mbg, print_to_terminal
 from modules.var import colors_list
 
 def matching_window(render_callback:RenderCallback):
@@ -22,6 +22,7 @@ def matching_window(render_callback:RenderCallback):
                 dpg.add_checkbox(label="Show Centers instead", default_value=False, tag="show_centers", callback=update_peak_starting_points, user_data=render_callback)
                 dpg.add_input_int(label="Width", default_value=1, min_value=1 , max_value=100, tag="center_width", width=100)
                 dpg.add_button(label="Draw MBG", callback=draw_mbg, user_data=render_callback)
+                dpg.add_button(label="Print to term", callback=print_to_terminal, user_data=render_callback)
                 
             for i in range(5):
                 with dpg.child_window(height=200, width=220, tag = f"theorical_peaks_window_{i}"):

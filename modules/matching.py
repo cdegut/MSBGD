@@ -14,6 +14,7 @@ def draw_mz_lines(sender = None, app_data = None, user_data:Tuple[MSData,int] = 
     mw:int = dpg.get_value(f"molecular_weight_{k}")
     charges:int = dpg.get_value(f"charges_{k}")
     nb_peak_show:int = dpg.get_value(f"nb_peak_show_{k}")
+    render_callback.spectrum.matching_data[k] = [mw, charges, nb_peak_show]
 
     mz_l = []
     z_l = []
@@ -37,6 +38,7 @@ def draw_mz_lines(sender = None, app_data = None, user_data:Tuple[MSData,int] = 
         dpg.draw_line((line, -50), (line, max_y), parent="peak_matching_plot", tag=f"mz_lines_{k}_{z_l[i]}", color=colors_list[k], thickness=1)
         i += 1
 
+    
     update_theorical_peak_table(k, mz_l, z_l)
     render_callback.mz_lines[k] = z_mz
     redraw_blocks(render_callback)
@@ -119,6 +121,7 @@ def redraw_blocks(render_callback:RenderCallback):
     for peak in spectrum.peaks:
         if not spectrum.peaks[peak].fitted:
             continue
+        spectrum.peaks[peak].matched_with = [0,0,0]  # Reset matched_with for all peaks
 
         start1pcs, start10pcs = spectrum.peaks[peak].start_range
         mid = (start10pcs + start1pcs) / 2
@@ -142,7 +145,7 @@ def redraw_blocks(render_callback:RenderCallback):
                     dpg.delete_item(f"mz_lines_{k}_{z_mz[0]}")
                     dpg.draw_line((z_mz[1], -50), (z_mz[1], block_height*1.5), parent="peak_matching_plot", tag=f"mz_lines_{k}_{z_mz[0]}", color=colors_list[k], thickness=1)
                     dpg.draw_line((mid, block_height), (mid, -25), parent="peak_matching_plot", color=transparent_color, thickness=thick, tag=f"fitted_peak_matching_{peak}")
-                    
+                    spectrum.peaks[peak].matched_with = [k, z_mz[0], z_mz[1]*z_mz[0]]
                     #dpg.delete_item(f"peak_annotation_matching_{k}_{z_mz[0]}")
                     if not dpg.does_alias_exist(f"peak_annotation_matching_{k}_{z_mz[0]}"):
                         x0_fit = spectrum.peaks[peak].x0_refined
@@ -194,3 +197,32 @@ def mass_difference(render_callback:RenderCallback):
         mw = dpg.get_value(f"molecular_weight_{i}")
         diff = mw - mw_set1
         dpg.set_value(f"MW_diff_{i}", f"d{diff}")
+
+def print_to_terminal(sender = None, app_data = None, user_data:RenderCallback = None):
+    spectrum = user_data.spectrum
+    print("Matched Peaks:")
+    if not spectrum.peaks:
+        print("No peaks found.")
+        return
+    # Collect peaks grouped by the first value of matched_with
+    grouped_peaks = {}
+    for peak in spectrum.peaks:
+        if not spectrum.peaks[peak].fitted:
+            continue
+        matched = spectrum.peaks[peak].matched_with
+        if matched == [0,0,0]:
+            continue
+        group_key = matched[0]
+        if group_key not in grouped_peaks:
+            grouped_peaks[group_key] = []
+        grouped_peaks[group_key].append({
+            "peak": peak,
+            "x0": spectrum.peaks[peak].x0_refined,
+            "integral": spectrum.peaks[peak].integral,
+            "matched_with": matched
+        })
+
+    for group, peaks in grouped_peaks.items():
+        print(f"Mass group {group}: ")
+        for p in peaks:
+            print(f"  Peak {p['peak']}: z: {p['matched_with'][1]}+, M: {p['matched_with'][2]:.2f}, x0: {p['x0']:.2f}, integral: {p['integral']:.2f}")

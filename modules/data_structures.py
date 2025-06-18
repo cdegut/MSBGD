@@ -5,6 +5,8 @@ import numpy as np
 from dataclasses import dataclass
 from modules.helpers import multi_bi_gaussian
 from typing import Dict, Tuple
+from dataclasses import field
+import pickle
 
 # Define a class to store mass spectrometry data
 class MSData():
@@ -16,6 +18,7 @@ class MSData():
         self.peaks: Dict[int : peak_params] = {}
         self.baseline_toggle = False
         self.baseline_need_update = False
+        self.matching_data = [[],[],[],[],[]]
         
            
     def import_csv(self, path:str):
@@ -72,6 +75,31 @@ class MSData():
         mbg = multi_bi_gaussian(data_x, *mbg_params)
         return mbg
  
+    def save_to_file(self, path: str):
+        """Save the entire MSData object to a file using pickle."""
+        with open(path, 'wb') as f:
+            pickle.dump(self, f)
+
+    #@staticmethod
+    #def load_from_file(path: str) -> "MSData":
+    #    """Load an MSData object from a file using pickle."""
+    #    with open(path, 'rb') as f:
+    #        data: MSData = pickle.load(f)
+    #    return data
+
+    def load_from_file(self, path: str):
+        with open(path, 'rb') as f:
+            new_data: MSData = pickle.load(f)
+        self.original_data = new_data.original_data
+        self.working_data = new_data.working_data
+        self.baseline = new_data.baseline
+        self.baseline_corrected = new_data.baseline_corrected
+        self.peaks = new_data.peaks
+        self.baseline_toggle = new_data.baseline_toggle
+        self.baseline_need_update = new_data.baseline_need_update
+        self.matching_data = new_data.matching_data
+        
+
 @dataclass
 class peak_params:
     A_init: float
@@ -86,7 +114,7 @@ class peak_params:
     start_range: Tuple[int, int] = (0, 0)
     do_not_fit: bool = False
     user_added: bool = False
-    integral: float = 0
+    matched_with: list = field(default_factory=lambda: [0,0,0])
 
 if __name__ == "__main__":
     ms = MSData()
