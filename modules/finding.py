@@ -10,6 +10,13 @@ peak_width_color = (99, 143, 169,64)
 def add_peak(sender, app_data, user_data:RenderCallback):
     spectrum = user_data.spectrum
 
+    
+    width_l = [spectrum.peaks[peak].width for peak in spectrum.peaks]
+    std_width = np.std(width_l)
+    med_width = np.median(width_l) if len(width_l) > 0 else 0
+
+    width = med_width if med_width != 0 else dpg.get_value("peak_detection_width")
+
     i = 0
     for peak in spectrum.peaks:
         if spectrum.peaks[peak].user_added:
@@ -19,7 +26,7 @@ def add_peak(sender, app_data, user_data:RenderCallback):
     mid_spectra = (spectrum.working_data[:,0][0] + spectrum.working_data[:,0][-1]) / 2
     center_slice = spectrum.working_data[:,1][(spectrum.working_data[:,0] > mid_spectra - 0.5) & (spectrum.working_data[:,0] < mid_spectra + 0.5)]
     max_y = max(center_slice) if len(center_slice) > 0 else 0
-    width = dpg.get_value("peak_detection_width") 
+    
     new_peak = peak_params(A_init=max_y, x0_init=mid_spectra, width=width, user_added=True)
 
     spectrum.peaks[new_peak_index] = new_peak

@@ -32,17 +32,17 @@ def initialise_windows(render_callback):
 
 def file_dialog(render_callback):   
     with dpg.file_dialog(directory_selector=False, show=False, user_data=render_callback ,callback=open_file_callback, id="file_dialog_id", width=700 ,height=400):
-        dpg.add_file_extension(".csv", color=(0, 255, 0, 255), custom_text="[csv]")
-        dpg.add_file_extension(".xlsx", color=(0, 255, 0, 255), custom_text="[xlsx]")
-        dpg.add_file_extension(".xls", color=(0, 255, 0, 255), custom_text="[xls]")
+        dpg.add_file_extension(".csv", color=(110,79,46, 255), custom_text="[csv]")
+        dpg.add_file_extension(".xlsx", color=(16,124,65, 255), custom_text="[xlsx]")
+        dpg.add_file_extension(".xls", color=(16,124,65, 255), custom_text="[xls]")
 
 def file_dialog_load_saved_data(render_callback):
     with dpg.file_dialog(directory_selector=False, show=False, user_data=render_callback ,callback=open_pkl_callback, id="file_dialog_id_saved_data", width=700 ,height=400):
-        dpg.add_file_extension(".pkl", color=(255, 255, 0, 255), custom_text="[pkl]")
+        dpg.add_file_extension(".pkl", color=(54,92,45, 255), custom_text="[pkl]")
 
 def file_dialog_save_data(render_callback):
     with dpg.file_dialog(directory_selector=False, show=False, user_data=render_callback ,callback=save_pkl_callback, id="file_dialog_id_save_data", width=700 ,height=400):
-        dpg.add_file_extension(".pkl", color=(255, 255, 0, 255), custom_text="[pkl]")
+        dpg.add_file_extension(".pkl", color=(54,92,45, 255), custom_text="[pkl]")
 
 def open_file_callback(sender, app_data, user_data):
     render_callback = user_data

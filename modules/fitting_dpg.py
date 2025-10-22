@@ -16,12 +16,13 @@ def fitting_window(render_callback):
 
         with dpg.group(horizontal=True, horizontal_spacing= 50):
             with dpg.group(horizontal=False):     
-                dpg.add_button(label="Windowed Multi Bi Gaussian Deconvolution",callback=run_fitting, user_data=render_callback)
-                dpg.add_button(label = "Stop Fitting", callback=stop_fitting , user_data=render_callback)
+                dpg.add_button(label="Start Multi Bi Gaussian Deconvolution",callback=run_fitting, user_data=render_callback, tag="start_fitting_button")
+                dpg.add_checkbox(label = "<--- Tick to Stop Fitting", user_data=render_callback, tag="stop_fitting_checkbox", show=False)
 
                 with dpg.group(horizontal=False):
                     dpg.add_checkbox(label="Use multithreading", default_value=True, tag="use_multithreading")
                     dpg.add_checkbox(label="Fit on filtered data", default_value=True, tag="use_filtered")
+                    dpg.add_checkbox(label="Reduce width variance", default_value=True, tag="use_reduced")
             dpg.add_loading_indicator(style=5,radius=3, show=False, tag="Fitting_indicator")
             dpg.add_text("", tag="Fitting_indicator_text")
         with dpg.group(horizontal=True, horizontal_spacing= 50):
@@ -57,4 +58,5 @@ def show_residual_callback(sender, app_data):
 def stop_fitting(sender, app_data, user_data:RenderCallback):
     user_data.stop_fitting = True
     print("Fitting stopped")
+    print(user_data.stop_fitting)
     return

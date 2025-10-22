@@ -15,7 +15,6 @@ class RenderCallback:
 
     def execute(self):
         now = time.time()
-
         if self.spectrum.baseline_need_update == True: 
             if  now - self.last_baseline_corrected > 0.5:
                 self.correct_baseline()

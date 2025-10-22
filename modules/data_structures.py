@@ -1,5 +1,5 @@
 from pybaselines import Baseline
-from scipy.signal import savgol_filter
+from scipy.signal import savgol_filter, medfilt
 import pandas as pd
 import numpy as np
 from dataclasses import dataclass
@@ -19,8 +19,7 @@ class MSData():
         self.baseline_toggle = False
         self.baseline_need_update = False
         self.matching_data = [[],[],[],[],[]]
-        
-           
+                  
     def import_csv(self, path:str):
         return True
     
@@ -37,6 +36,7 @@ class MSData():
         if window_length % 2 == 0:
             window_length += 1  # Ensure window_length is odd
         filtered =  savgol_filter(self.working_data[:,1], window_length=window_length, polyorder=polyorder)
+        # filtered = remove_spikes_median(filtered, 31)
         return filtered.tolist()
 
     def correct_baseline(self, window):
@@ -112,6 +112,7 @@ class peak_params:
     fitted: bool = False
     integral: float = 0
     start_range: Tuple[int, int] = (0, 0)
+    regression_fct : Tuple[float, float] = (1.0, 0.0)
     do_not_fit: bool = False
     user_added: bool = False
     matched_with: list = field(default_factory=lambda: [0,0,0])
@@ -125,3 +126,11 @@ if __name__ == "__main__":
     ms.guess_sampling_rate()
     print(ms.working_data[:,0])
 
+def remove_spikes_median(y, kernel_len=11):
+    """
+    Median filter. kernel_len must be odd.
+    - kernel_len ~ a bit larger than spike width in samples.
+    """
+    if kernel_len % 2 == 0:
+        kernel_len += 1
+    return medfilt(y, kernel_len)

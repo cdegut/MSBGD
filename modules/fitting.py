@@ -1,3 +1,4 @@
+from einops import reduce
 from modules.data_structures import MSData, peak_params
 from typing import Tuple
 import dearpygui.dearpygui as dpg
@@ -10,28 +11,40 @@ import time
 from scipy.signal import savgol_filter
 
 from modules.rendercallback import RenderCallback
+import seaborn as sns
 
 def run_fitting(sender = None, app_data = None, user_data:RenderCallback = None):
     render_callback = user_data
     dpg.show_item("Fitting_indicator")
     k = dpg.get_value("fitting_iterations")
     std = dpg.get_value("fitting_std")
+    dpg.set_value("stop_fitting_checkbox", False)
+    dpg.hide_item("start_fitting_button")
+    dpg.show_item("stop_fitting_checkbox")
     if dpg.get_value("show_residual_checkbox"):
         dpg.show_item("residual")
     use_filtered= dpg.get_value("use_filtered")
     user_data.stop_fitting = False
     rolling_window_fit(render_callback, k, std, use_filtered)
+    dpg.hide_item("stop_fitting_checkbox")
     dpg.hide_item("Fitting_indicator")
+    dpg.show_item("start_fitting_button")
 
-def initial_peaks_parameters(spectrum:MSData, asymetry = 1.5):
+def initial_peaks_parameters(spectrum:MSData, asymmetry = 1.8):
     initial_params = []
     working_peak_list = []
     i = 0
 
+    reduce_width_var = dpg.get_value("use_reduced")
+
     if spectrum.peaks is None:
         log("No peaks are detected. Please run peak detection first")
         return None
-    
+
+    width_l = [spectrum.peaks[peak].width for peak in spectrum.peaks]
+    std_width = np.std(width_l)
+    med_width = np.median(width_l)
+
     for peak in spectrum.peaks:
     
         x0_guess = spectrum.peaks[peak].x0_init
@@ -45,9 +58,13 @@ def initial_peaks_parameters(spectrum:MSData, asymetry = 1.5):
             i += 1
             continue
 
+        width_init = spectrum.peaks[peak].width
+        if reduce_width_var:
+            width_init = med_width *0.7 + 0.3*width_init
+
         A_guess = spectrum.peaks[peak].A_init
-        sigma_L_guess =  spectrum.peaks[peak].width /2
-        sigma_R_guess = sigma_L_guess * asymetry
+        sigma_L_guess =  width_init /2
+        sigma_R_guess = sigma_L_guess * asymmetry
         initial_params.extend([A_guess, x0_guess, sigma_L_guess, sigma_R_guess])       
         working_peak_list.append(peak)
         i += 1
@@ -114,7 +131,7 @@ def refine_peak_parameters(working_peak_list, mbg_params, render_callback:Render
 
     for k in range(iterations +1):
         render_callback.execute()
-        if render_callback.stop_fitting:
+        if dpg.get_value("stop_fitting_checkbox") or render_callback.stop_fitting:
             log("Fitting stopped by user")
             break
         residual = data_y - spectrum.calculate_mbg(data_x,  fitting=True)
@@ -250,6 +267,7 @@ def draw_fitted_peaks(sender = None, app_data = None, user_data:MSData = None, d
     # Generate fitted curve    
     peak_list = []
     mbg_param = []
+    colors = sns.color_palette("viridis", len(spectrum.peaks))
 
     i = 0
     for peak in spectrum.peaks:
@@ -258,6 +276,13 @@ def draw_fitted_peaks(sender = None, app_data = None, user_data:MSData = None, d
             continue
         if not spectrum.peaks[peak].fitted:
             continue
+       
+        color = int(colors[i][0]*255), int(colors[i][1]*255), int(colors[i][2]*255)
+
+        # with dpg.theme(tag = f"fitted_peaks_theme_{peak}"):
+        #     with dpg.theme_component(dpg.mvAll):
+        #         dpg.add_theme_style(dpg.mvPlotStyleVar_LineWeight, 3, category=dpg.mvThemeCat_Plots)
+        #         dpg.add_theme_color(dpg.mvPlotCol_Line, color, category=dpg.mvThemeCat_Plots)
 
         A = spectrum.peaks[peak].A_refined
         sigma_L_fit = spectrum.peaks[peak].sigma_L
@@ -269,11 +294,11 @@ def draw_fitted_peaks(sender = None, app_data = None, user_data:MSData = None, d
         mbg_param.extend([A, x0_fit, sigma_L_fit, sigma_R_fit])
 
         dpg.add_line_series(x_individual_fit, y_individual_fit, label=f"Peak {peak}", parent="y_axis_plot2", tag = f"fitted_peak_{peak}")
-        dpg.bind_item_theme(f"fitted_peak_{peak}", "fitted_peaks_theme")
-        dpg.add_plot_annotation(label=f"Peak {peak}", default_value=(x0_fit, A), offset=(-15, -15), color=[255, 255, 0, 255], clamped=False, parent="gaussian_fit_plot", tag=f"peak_annotation_{peak}")
-        i+1
-    
-    x_fit = np.linspace(np.min(spectrum.working_data[:,0]), np.max(spectrum.working_data[:,0]), 500)
+        dpg.bind_item_theme(f"fitted_peak_{peak}", f"fitted_peaks_theme_{peak}")
+        dpg.add_plot_annotation(label=f"Peak {peak}", default_value=(x0_fit, A), offset=(-15, -15), color=[120,120,120], clamped=False, parent="gaussian_fit_plot", tag=f"peak_annotation_{peak}")
+        i+=1
+
+    x_fit = np.linspace(np.min(spectrum.working_data[:,0]), np.max(spectrum.working_data[:,0]), spectrum.working_data.shape[0] // 2)
     y_fit = spectrum.calculate_mbg(x_fit)
     dpg.show_item("MBG_plot2")
     dpg.set_value("MBG_plot2", [x_fit.tolist(), y_fit.tolist()])

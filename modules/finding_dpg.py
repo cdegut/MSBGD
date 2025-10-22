@@ -26,7 +26,7 @@ def finding_window(render_callback):
             with dpg.child_window(height=230, width=300):     
                 dpg.add_text("Data Filtering:")
                 dpg.add_text("Smoothing window:")
-                dpg.add_slider_int(label="", default_value=925, min_value=3, max_value=1000, width=250, callback=filter_data, user_data=spectrum, tag="smoothing_window")
+                dpg.add_slider_int(label="", default_value=925, min_value=3, max_value=5000, width=250, callback=filter_data, user_data=spectrum, tag="smoothing_window")
                 dpg.add_text("")
                 dpg.add_text("Baseline estimation:")
                 with dpg.group(horizontal=True, horizontal_spacing= 50):

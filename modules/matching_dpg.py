@@ -1,6 +1,6 @@
 import dearpygui.dearpygui as dpg
 from modules.rendercallback import RenderCallback
-from modules.matching import draw_mz_lines, update_peak_starting_points, draw_mbg, print_to_terminal
+from modules.matching import draw_mz_lines, redraw_blocks, update_peak_starting_points, draw_mbg, print_to_terminal, refine_matching, show_projection
 from modules.var import colors_list
 
 def matching_window(render_callback:RenderCallback):
@@ -16,11 +16,13 @@ def matching_window(render_callback:RenderCallback):
         with dpg.group(horizontal=True, horizontal_spacing= 25):
             with dpg.group(horizontal=False):
                 dpg.add_button(label="Show fitted peaks", callback=update_peak_starting_points, user_data=render_callback)
-                dpg.add_text("Peaks Start:")
-                dpg.add_input_float(label="Lower  %", default_value=1,min_value=0.1 , max_value=100, tag="lower_bound", width=100)
-                dpg.add_input_float(label="Upper  %", default_value=25, min_value=1 , max_value=100, tag="upper_bound", width=100)
-                dpg.add_checkbox(label="Show Centers instead", default_value=False, tag="show_centers", callback=update_peak_starting_points, user_data=render_callback)
-                dpg.add_input_int(label="Width", default_value=1, min_value=1 , max_value=100, tag="center_width", width=100)
+                dpg.add_text("Tolerance:")
+                dpg.add_input_int(label="m/z", default_value=25,min_value=1 , max_value=200, tag="block_width", width=100)
+                dpg.add_text("Refine within:")
+                dpg.add_input_int(label="Da", default_value=200, min_value=1 , max_value=1000, tag="refinement_width", width=100)
+                dpg.add_checkbox(label="Show x0 projection", default_value=False, tag="show_projection", callback=show_projection, user_data=render_callback)
+                # dpg.add_checkbox(label="Show Centers instead", default_value=False, tag="show_centers", callback=update_peak_starting_points, user_data=render_callback)
+                # dpg.add_input_int(label="Width", default_value=1, min_value=1 , max_value=100, tag="center_width", width=100)
                 dpg.add_button(label="Draw MBG", callback=draw_mbg, user_data=render_callback)
                 dpg.add_button(label="Print to term", callback=print_to_terminal, user_data=render_callback)
                 
@@ -31,10 +33,12 @@ def matching_window(render_callback:RenderCallback):
                             dpg.add_theme_color(dpg.mvThemeCol_Border, colors_list[i], category=dpg.mvThemeCat_Core)
                     
                     dpg.add_text(f"Peak Set {i}", tag=f"rmsd_{i}")
+                    dpg.add_text("", tag = f"MW_diff_{i}")
                     
                     with dpg.group(horizontal=True):
                         dpg.add_input_int(label="MW", default_value=549000, tag=f"molecular_weight_{i}", step = 100, width = 125, callback=draw_mz_lines, user_data=(render_callback, i))
-                        dpg.add_text("", tag = f"MW_diff_{i}")
+                        dpg.add_button(label="Refine", callback=refine_matching, user_data=(render_callback, i))
+                        
                     
                     dpg.add_input_int(label="Charges", default_value=52, tag=f"charges_{i}", width = 125, callback=draw_mz_lines,  user_data=(render_callback, i))
                     dpg.add_input_int(label="# Peaks", default_value=5, tag=f"nb_peak_show_{i}",step = 1, width = 125, callback=draw_mz_lines, user_data=(render_callback, i))
