@@ -1,8 +1,5 @@
-from ast import alias
-from hmac import new
 from typing import List, Tuple
 import dearpygui.dearpygui as dpg
-from networkx import sigma
 from modules.data_structures import MSData
 import numpy as np
 from modules.rendercallback import RenderCallback
@@ -41,8 +38,7 @@ def draw_mz_lines(sender = None, app_data = None, user_data:Tuple[RenderCallback
         max_y = max(center_slice) if len(center_slice) > 0 else 0
         dpg.draw_line((line, -50), (line, max_y), parent="peak_matching_plot", tag=f"mz_lines_{k}_{z_l[i]}", color=colors_list[k], thickness=1)
         i += 1
-
-    
+   
     update_theorical_peak_table(k, mz_l, z_l)
     render_callback.mz_lines[k] = z_mz
     redraw_blocks(render_callback)
@@ -68,7 +64,7 @@ def update_theorical_peak_table(k:int, mz_list:List[float], z_list):
         with dpg.table_row(parent = f"theorical_peak_table_{k}"):
             for n in range(0, 3):
                 try:
-                    dpg.add_text(f"{mz_list[r*3+n]:.2f}")
+                    dpg.add_text(f"{int(mz_list[r*3+n])}")
                 except IndexError:
                     pass    
 
@@ -129,9 +125,7 @@ def update_peak_starting_points(sender = None, app_data= None, user_data:RenderC
 
             x0 = -b / a
 
-            # spectrum.peaks[peak].start_range = (x0 - sigma_L/2, x0 + sigma_L/2)
             spectrum.peaks[peak].regression_fct = (a, b)
-            print(f"Peak {peak}: a={a}, b={b}, x0={x0}")
 
     else:
 
@@ -226,7 +220,7 @@ def redraw_blocks(render_callback:RenderCallback):
                 dpg.add_plot_annotation(label=f"{z_mz[0]}+", default_value=(z_mz[1], 0), offset=(-15, -15-k*15), color=colors_list[k], clamped=False, parent="peak_matching_plot", tag=f"peak_annotation_matching_{k}_{z_mz[1]}")
     
     matching_quality(render_callback)
-    mass_difference(render_callback)
+    check_mass_difference(render_callback)
 
 def show_projection(sender = None, app_data = None, user_data:RenderCallback = None):
     redraw_blocks(user_data)
@@ -268,7 +262,6 @@ def matching_quality(render_callback:RenderCallback):
         else:
             dpg.set_value(f"rmsd_{k}", f"No matching peaks")
 
-
     
 def refine_matching(sender = None, app_data = None, user_data:Tuple[RenderCallback,int] = None):
     refinement_width = dpg.get_value("refinement_width")
@@ -286,12 +279,45 @@ def refine_matching(sender = None, app_data = None, user_data:Tuple[RenderCallba
     dpg.set_value(f"molecular_weight_{k}", new_mw)
     draw_mz_lines(sender = None, app_data = None, user_data=user_data)
 
-def mass_difference(render_callback:RenderCallback):
-    mw_set1 =dpg.get_value("molecular_weight_0")
-    for i in range(1, 5):
-        mw = dpg.get_value(f"molecular_weight_{i}")
+def check_mass_difference(render_callback:RenderCallback):
+    for k in range(0, 5):
+        mw_set_i = dpg.get_value(f"compare_set_{k}")
+        mw_set1 =dpg.get_value(f"molecular_weight_{mw_set_i}")
+        mw = dpg.get_value(f"molecular_weight_{k}")
         diff = mw - mw_set1
-        dpg.set_value(f"MW_diff_{i}", f"d{diff}")
+        dpg.set_value(f"MW_diff_{k}", f"d{diff}")
+    check_integral_ratio(render_callback)
+
+def check_integral_ratio(render_callback:RenderCallback):
+    for k in range(0, 5):
+        compare_to = int(dpg.get_value(f"compare_set_{k}"))
+        integral_set1 = []
+        integral_set2 = []
+
+        for peak in render_callback.spectrum.peaks:
+            if not render_callback.spectrum.peaks[peak].fitted:
+                continue
+            matched = render_callback.spectrum.peaks[peak].matched_with
+            if matched == [0,0,0]:
+                continue
+
+            if matched[0] == compare_to:
+                integral_set1.append([matched[1], render_callback.spectrum.peaks[peak].integral])
+            if matched[0] == k:
+                integral_set2.append([matched[1], render_callback.spectrum.peaks[peak].integral])
+        
+        ratios = []
+        zs = []
+        for z1, int1 in integral_set1:
+            for z2, int2 in integral_set2:
+                if z1 == z2:
+                    ratio = int1 / int2
+                    ratios.append(ratio)
+                    zs.append(z1)
+                    
+        if len(ratios) >0:
+            geometric_mean = np.exp(np.mean(np.log(ratios)))
+            dpg.set_value(f"Integral_ratio_{k}", f"{geometric_mean:.2f} using {len(zs)} peaks")
 
 def print_to_terminal(sender = None, app_data = None, user_data:RenderCallback = None):
     spectrum = user_data.spectrum
