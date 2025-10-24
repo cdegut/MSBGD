@@ -33,7 +33,6 @@ def matching_window(render_callback:RenderCallback):
                             dpg.add_theme_color(dpg.mvThemeCol_Border, colors_list[i], category=dpg.mvThemeCat_Core)
                     
                     dpg.add_text(f"Peak Set {i}", tag=f"rmsd_{i}")
-                    dpg.add_text("", tag = f"MW_diff_{i}")
                     
                     with dpg.group(horizontal=True):
                         dpg.add_input_int(label="MW", default_value=549000, tag=f"molecular_weight_{i}", step = 100, width = 125, callback=draw_mz_lines, user_data=(render_callback, i))
@@ -42,6 +41,13 @@ def matching_window(render_callback:RenderCallback):
                     
                     dpg.add_input_int(label="Charges", default_value=52, tag=f"charges_{i}", width = 125, callback=draw_mz_lines,  user_data=(render_callback, i))
                     dpg.add_input_int(label="# Peaks", default_value=5, tag=f"nb_peak_show_{i}",step = 1, width = 125, callback=draw_mz_lines, user_data=(render_callback, i))
+                    
+                    with dpg.group(horizontal=True):
+                        dpg.add_text("Compare with set:")
+                        dpg.add_input_int(default_value=0, tag=f"compare_set_{i}", width = 80, callback=draw_mz_lines,  user_data=(render_callback, i))
+                    dpg.add_text("", tag = f"MW_diff_{i}")
+                    dpg.add_text("GeoMean of integral ratios:")
+                    dpg.add_text("", tag = f"Integral_ratio_{i}")
                     dpg.add_table(header_row=False, row_background=True, tag=f"theorical_peak_table_{i}")
                     dpg.bind_item_theme(f"theorical_peaks_window_{i}", f"theme_peak_window_{i}")
     
