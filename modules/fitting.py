@@ -1,3 +1,4 @@
+from turtle import width
 from einops import reduce
 from modules.data_structures import MSData, peak_params
 from typing import Tuple
@@ -35,6 +36,8 @@ def initial_peaks_parameters(spectrum:MSData, asymmetry = 1.8):
     working_peak_list = []
     i = 0
 
+
+
     reduce_width_var = dpg.get_value("use_reduced")
 
     if spectrum.peaks is None:
@@ -60,12 +63,21 @@ def initial_peaks_parameters(spectrum:MSData, asymmetry = 1.8):
 
         width_init = spectrum.peaks[peak].width
         if reduce_width_var:
-            width_init = med_width *0.7 + 0.3*width_init
+            width_init = med_width *0.6 + 0.4*width_init
+        
+
+        # Select working data within x0_guess ± width_init
+        mask = (spectrum.working_data[:,0] >= x0_guess - width_init*2) & (spectrum.working_data[:,0] <= x0_guess + width_init*2)
+        working_data_peak = spectrum.working_data[mask]
+        if len(working_data_peak) > 1:
+            sampling_rate = np.mean(np.diff(working_data_peak[:,0]))
+        else:
+            sampling_rate = np.mean(np.diff(spectrum.working_data[:,0]))
 
         A_guess = spectrum.peaks[peak].A_init
-        sigma_L_guess =  width_init /2
+        sigma_L_guess =  width_init / 2
         sigma_R_guess = sigma_L_guess * asymmetry
-        initial_params.extend([A_guess, x0_guess, sigma_L_guess, sigma_R_guess])       
+        initial_params.extend([A_guess, x0_guess, sigma_L_guess, sigma_R_guess, sampling_rate])       
         working_peak_list.append(peak)
         i += 1
     
@@ -88,14 +100,15 @@ def rolling_window_fit(render_callback, iterations = 1000, std =0.25, use_filter
   
     i = 0
     for peak in working_peak_list:
-        A_guess, x0_guess, sigma_L_guess, sigma_R_guess =  initial_params[i*4:(i+1)*4]
-        log(f"Peak {peak}: A = {A_guess:.3f}, x0 = {x0_guess:.3f}, sigma_L = {sigma_L_guess:.3f}, sigma_R = {sigma_R_guess:.3f}")
+        A_guess, x0_guess, sigma_L_guess, sigma_R_guess, sampling_rate =  initial_params[i*5:(i+1)*5]
+        print(f"Peak {peak}: A = {A_guess:.3f}, x0 = {x0_guess:.3f}, sigma_L = {sigma_L_guess:.3f}, sigma_R = {sigma_R_guess:.3f}, sampling_rate = {sampling_rate:.3f}")
 
         spectrum.peaks[peak].A_refined = A_guess
         spectrum.peaks[peak].x0_refined = x0_guess
         spectrum.peaks[peak].sigma_L = sigma_L_guess
         spectrum.peaks[peak].sigma_R = sigma_R_guess
         spectrum.peaks[peak].fitted = False
+        spectrum.peaks[peak].sampling_rate = sampling_rate
         i += 1
  
     fit = refine_peak_parameters(working_peak_list, initial_params, render_callback, iterations, std , use_filtered = use_filtered)   
@@ -184,66 +197,67 @@ def _refine_iteration(peak:int, data_x, data_y, spectrum:MSData, original_peak):
             x0_fit = spectrum.peaks[peak].x0_refined
             sigma_L_fit = spectrum.peaks[peak].sigma_L
             sigma_R_fit = spectrum.peaks[peak].sigma_R
-
-            mask = (data_x >= x0_fit - sigma_R_fit/4) & (data_x <= x0_fit + sigma_L_fit/4)
+            sampling_rate = spectrum.peaks[peak].sampling_rate
+            
+            R_val = sigma_R_fit/4 if sigma_R_fit > sampling_rate*20 else sampling_rate*5
+            L_val = sigma_L_fit/4 if sigma_L_fit > sampling_rate*20 else sampling_rate*5
+            mask = (data_x >= x0_fit - R_val) & (data_x <= x0_fit + L_val)
             data_x_peak = data_x[mask]
             data_y_peak = data_y[mask]
             
-            if len(data_x_peak) == 0 or len(data_y_peak) == 0:
-                log(f"masking error for peak {peak} block 1")              
-                return False
-
-            peak_error = np.mean(data_y_peak  - spectrum.calculate_mbg(data_x_peak, fitting=True))
-            spectrum.peaks[peak].A_refined = spectrum.peaks[peak].A_refined + (peak_error/10)
+            # Adjust the amplitude
+            if len(data_x_peak) > 0 and len(data_y_peak) > 0:
+                peak_error = np.mean(data_y_peak  - spectrum.calculate_mbg(data_x_peak, fitting=True))
+                spectrum.peaks[peak].A_refined = spectrum.peaks[peak].A_refined + (peak_error/50)   
 
             # Sharpen the peak
-            L_window = original_peak.sigma_L
-            R_window = original_peak.sigma_R       
-            L_mask = (data_x >= x0_fit - L_window) & (data_x <= x0_fit - L_window/2)
-            R_mask = (data_x >= x0_fit + R_window/2) & (data_x <= x0_fit + R_window)
+            for iteration in range(1, 3):
+                L_window = original_peak.sigma_L * iteration
+                R_window = original_peak.sigma_R * iteration
+                L_mask = (data_x >= x0_fit - L_window) & (data_x <= x0_fit - L_window/2)
+                R_mask = (data_x >= x0_fit + R_window/2) & (data_x <= x0_fit + R_window)
 
-            data_x_L = data_x[L_mask]
-            data_y_L = data_y[L_mask]
-            data_x_R = data_x[R_mask]
-            data_y_R = data_y[R_mask]
+                data_x_L = data_x[L_mask]
+                data_y_L = data_y[L_mask]
+                data_x_R = data_x[R_mask]
+                data_y_R = data_y[R_mask]
+                
+                mbg_L = spectrum.calculate_mbg(data_x_L, fitting=True)
+                mbg_R = spectrum.calculate_mbg(data_x_R, fitting=True)
 
-            if len(data_x_L) == 0 or len(data_x_R) == 0 or len(data_y_L) == 0 or len(data_y_R) == 0:
-                log(f"masking error for peak {peak} block 2")
-                log(f"Peak {peak}: x0 = {x0_fit:.3f}, sigma_L = {sigma_L_fit:.3f}, sigma_R = {sigma_R_fit:.3f}")
-                log(f"L_mask: {L_mask}, R_mask: {R_mask}")
-                log(f"data_x_L: {data_x_L}, data_y_L: {data_y_L}, data_x_R: {data_x_R}, data_y_R: {data_y_R}")
-                log(f"data_x_peak: {data_x_peak}, data_y_peak: {data_y_peak}")
-                log(f"data_x: {data_x}, data_y: {data_y}")
-                log(f"Error while fitting")
-                return False
-            
-            mbg_L = spectrum.calculate_mbg(data_x_L, fitting=True)
-            mbg_R = spectrum.calculate_mbg(data_x_R, fitting=True)
+                error_l = np.mean((data_y_L - mbg_L))
+                error_r = np.mean((data_y_R - mbg_R))
 
-            error_l = np.mean((data_y_L - mbg_L))
-            error_r = np.mean((data_y_R - mbg_R))
 
-            if error_l > 0 and error_r < 0:
-                x0_fit = x0_fit - 0.02
+                moved = False
+                if (iteration ==1):
+                    if error_l > 0 and error_r < 0:
+                        x0_fit = x0_fit - 0.02
+                        moved = True
+                    elif error_l <0 and error_r > 0:
+                        x0_fit = x0_fit + 0.02
+                        moved = True
 
-            elif error_l <0 and error_r > 0:
-                x0_fit = x0_fit + 0.02
-            else:
-                sigma_L_fit = sigma_L_fit + error_l/1000
-                sigma_R_fit = sigma_R_fit + error_r/1000                     
+                if not moved:
+                    val = 1000 if iteration ==1 else 2000 
+                    sigma_L_fit = sigma_L_fit + error_l/val
+                    sigma_R_fit = sigma_R_fit + error_r/val
 
-            if sigma_L_fit > original_peak.width*4:
-                sigma_L_fit = sigma_L_fit/2
-            if sigma_R_fit > original_peak.width*4:
-                sigma_R_fit = sigma_R_fit/2
-            if sigma_L_fit < 1:
-                sigma_L_fit = original_peak.width * 1.5
-            if sigma_R_fit < 1:
-                sigma_R_fit = original_peak.width * 1.5
-            
-            spectrum.peaks[peak].sigma_L = sigma_L_fit
-            spectrum.peaks[peak].sigma_R = sigma_R_fit
-            spectrum.peaks[peak].x0_refined = x0_fit
+                # This is supposed to keep the widths in a reasonable range, 
+                # but it cause high asymmetry peak to not fit correctly.
+                # Removed for now, doesn't seem needed with the two pass approach.
+                # if sigma_L_fit > original_peak.width*3:
+                #     sigma_L_fit = sigma_L_fit/2
+                # if sigma_R_fit > original_peak.width*3:
+                #     sigma_R_fit = sigma_R_fit/2
+                if sigma_L_fit <  sampling_rate:
+                    sigma_L_fit = sampling_rate *4
+                if sigma_R_fit <  sampling_rate:
+                    sigma_R_fit = sampling_rate *4
+                
+                spectrum.peaks[peak].sigma_L = sigma_L_fit
+                spectrum.peaks[peak].sigma_R = sigma_R_fit
+                spectrum.peaks[peak].x0_refined = x0_fit
             
 def update_peak_params(peak_list, popt, spectrum:MSData):
     for peak in peak_list:   
@@ -260,7 +274,7 @@ def draw_fitted_peaks(sender = None, app_data = None, user_data:MSData = None, d
     # Delete previous peaks
     
     for alias in dpg.get_aliases():
-        if alias.startswith("fitted_peak_") or alias.startswith("peak_annotation_"):
+        if alias.startswith("fitted_peak_") or alias.startswith("peak_annotation_") or alias.startswith("fitted_peaks_theme_"):
             dpg.delete_item(alias)
     if delete:
         return    
@@ -279,10 +293,10 @@ def draw_fitted_peaks(sender = None, app_data = None, user_data:MSData = None, d
        
         color = int(colors[i][0]*255), int(colors[i][1]*255), int(colors[i][2]*255)
 
-        # with dpg.theme(tag = f"fitted_peaks_theme_{peak}"):
-        #     with dpg.theme_component(dpg.mvAll):
-        #         dpg.add_theme_style(dpg.mvPlotStyleVar_LineWeight, 3, category=dpg.mvThemeCat_Plots)
-        #         dpg.add_theme_color(dpg.mvPlotCol_Line, color, category=dpg.mvThemeCat_Plots)
+        with dpg.theme(tag = f"fitted_peaks_theme_{peak}"):
+            with dpg.theme_component(dpg.mvAll):
+                dpg.add_theme_style(dpg.mvPlotStyleVar_LineWeight, 3, category=dpg.mvThemeCat_Plots)
+                dpg.add_theme_color(dpg.mvPlotCol_Line, color, category=dpg.mvThemeCat_Plots)
 
         A = spectrum.peaks[peak].A_refined
         sigma_L_fit = spectrum.peaks[peak].sigma_L
