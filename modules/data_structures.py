@@ -19,6 +19,7 @@ class MSData():
         self.baseline_toggle = False
         self.baseline_need_update = False
         self.matching_data = [[],[],[],[],[]]
+
                   
     def import_csv(self, path:str):
         return True
@@ -30,16 +31,44 @@ class MSData():
         self.correct_baseline(0)
     
     def clip_data(self, L_clip:int, R_clip:int):
+        if len(self.original_data) <= 2:
+            return
         self.working_data = self.original_data[(self.original_data[:,0] > L_clip) & (self.original_data[:,0] < R_clip)]
 
     def get_filterd_data(self, window_length, polyorder=2):
+        if(len(self.working_data[:,1]) >= window_length):
+            window_length = window_length - 1         
         if window_length % 2 == 0:
-            window_length += 1  # Ensure window_length is odd
+            window_length -= 1  # Ensure window_length is odd
+
         filtered =  savgol_filter(self.working_data[:,1], window_length=window_length, polyorder=polyorder)
-        # filtered = remove_spikes_median(filtered, 31)
         return filtered.tolist()
+    
+    def get_2nd_derivative(self, window_length, polyorder=2):
+        if(len(self.working_data[:,1]) >= window_length):
+            window_length = window_length - 1
+        if window_length % 2 == 0:
+            window_length -= 1  # Ensure window_length is odd
+
+        filtered =  savgol_filter(self.working_data[:,1], window_length=window_length, polyorder=polyorder)
+        derivative = np.gradient(filtered, self.working_data[:,0])
+        shift = int(np.max(self.working_data[:,1]) / 2)
+        print(shift)
+        derivative = derivative * shift + shift
+        derivative = savgol_filter(derivative, window_length=window_length, polyorder=polyorder)
+        derivative2nd = np.gradient(derivative, self.working_data[:,0])
+        derivative2nd = savgol_filter(derivative2nd, window_length=window_length, polyorder=polyorder) 
+        derivative2nd = derivative2nd * -1
+        max_val = np.max(derivative2nd)
+        if max_val != 0:
+            derivative2nd = derivative2nd * (shift / max_val)
+        derivative2nd = np.clip(derivative2nd, 0, None)
+        return derivative2nd.tolist()
 
     def correct_baseline(self, window):
+        if len(self.original_data) <= 2:
+            return
+        
         if not self.baseline_toggle:
             self.baseline_corrected = self.working_data
             self.baseline = np.column_stack((self.working_data[:,0], [0]*len(self.working_data)))
@@ -47,16 +76,23 @@ class MSData():
             return
           
         baseline_fitter = Baseline(x_data=self.working_data[:,0])
-        bkg_4, params_4 = baseline_fitter.snip(self.working_data[:,1], max_half_window=window, decreasing=True, smooth_half_window=3)    
-        self.baseline = np.column_stack((self.working_data[:,0], bkg_4 ))
-        self.baseline_corrected = np.column_stack((self.working_data[:,0], self.working_data[:,1] - bkg_4))
-        self.baseline_need_update = False        
+        try:
+            bkg_4, params_4 = baseline_fitter.snip(self.working_data[:,1], max_half_window=window, decreasing=True, smooth_half_window=3) 
+            self.baseline = np.column_stack((self.working_data[:,0], bkg_4 ))
+            self.baseline_corrected = np.column_stack((self.working_data[:,0], self.working_data[:,1] - bkg_4))
+            self.baseline_need_update = False    
+        except:
+            return    
     
     def guess_sampling_rate(self):
+        if len(self.original_data) <= 2:
+            return
         sampling_rate = np.mean(np.diff(self.working_data[:,0]))
         return sampling_rate
     
     def request_baseline_update(self) -> None:
+        if len(self.original_data) <= 2:
+            return
         self.baseline_need_update = True
     
     def calculate_mbg(self, data_x: np.ndarray, fitting = False) -> np.ndarray:
@@ -109,13 +145,14 @@ class peak_params:
     x0_refined: float = 0
     sigma_L: float = 0
     sigma_R: float =0
+    sampling_rate: float = 0.0
     fitted: bool = False
     integral: float = 0
     start_range: Tuple[int, int] = (0, 0)
     regression_fct : Tuple[float, float] = (1.0, 0.0)
     do_not_fit: bool = False
     user_added: bool = False
-    matched_with: list = field(default_factory=lambda: [0,0,0])
+    matched_with: dict = field(default_factory=lambda: [0,0,0]) # set, z, mw
 
 if __name__ == "__main__":
     ms = MSData()

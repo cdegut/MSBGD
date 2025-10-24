@@ -133,11 +133,17 @@ def tick_peak_callback(sender, app_data, user_data:Tuple[RenderCallback, int]):
     draw_found_peaks(spectrum)
 
 def peaks_finder(spectrum:MSData, threshold:int, width:int, max_width:int, distance:int, filter_window:int, baseline_window:int):
-    filtered = spectrum.get_filterd_data(filter_window)
+    use_derivative2nd = dpg.get_value("use_2nd_derivative_checkbox")
+    
     spectrum.correct_baseline(baseline_window)
     baseline = spectrum.baseline[:,1] 
-    filtered_thresolded = np.where(np.abs(filtered - baseline) <= threshold, 0, (filtered - baseline))
-    peaks, peaks_data = find_peaks(filtered_thresolded, width=width, distance=distance)
+
+    if use_derivative2nd:
+        filtered = spectrum.get_2nd_derivative(filter_window)
+    else:
+        filtered = spectrum.get_filterd_data(filter_window)
+        filtered = np.where(np.abs(filtered - baseline) <= threshold, 0, (filtered - baseline))
+    peaks, peaks_data = find_peaks(filtered, width=width, distance=distance)
     
     # Delete previous peaks
     peak_to_delete = []
@@ -164,8 +170,12 @@ def peaks_finder(spectrum:MSData, threshold:int, width:int, max_width:int, dista
         width = peaks_data["widths"][i] * sampling_rate
         if width > max_width:
             width = max_width
-
-        new_peak = peak_params(A_init=spectrum.working_data[:,1][peak], x0_init=spectrum.working_data[:,0][peak], width=width)
+        
+        A_init=spectrum.working_data[:,1][peak] - baseline[peak]
+        if A_init < threshold:
+            continue
+            
+        new_peak = peak_params(A_init=A_init, x0_init=spectrum.working_data[:,0][peak], width=width)
         spectrum.peaks[new_peak_index] = new_peak
         new_peak_index += 1
         i += 1
