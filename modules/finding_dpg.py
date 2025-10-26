@@ -31,7 +31,7 @@ def finding_window(render_callback):
                 dpg.add_text("")
                 dpg.add_text("Baseline estimation:")
                 with dpg.group(horizontal=True, horizontal_spacing= 50):
-                    dpg.add_checkbox(label="Correct baseline", callback=toggle_baseline, user_data=spectrum)
+                    dpg.add_checkbox(label="Correct baseline", callback=toggle_baseline, user_data=spectrum, default_value=False, tag="baseline_correction_checkbox")
                 dpg.add_text("Baseline window:") 
                 dpg.add_slider_int(label="", default_value=1000, min_value=10, max_value=2000, width=250, callback=spectrum.request_baseline_update, user_data=spectrum, tag="baseline_window")
                 dpg.add_checkbox(label="Show Fit Residual", default_value=False, tag="fitting_residual_plot1_checkbox", callback=get_residual)

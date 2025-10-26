@@ -1,8 +1,12 @@
 
 import dearpygui.dearpygui as dpg
 from modules.data_structures import MSData
+from modules.finding_dpg import data_clipper
 from modules.matching import draw_mz_lines
 import pandas as pd
+from modules.finding import draw_found_peaks, update_found_peaks_table, update_user_peaks_table, redraw_user_peaks
+from modules.matching import update_peak_starting_points
+from modules.utils import log
 
 def initialise_windows(render_callback):
     spectrum:MSData= render_callback.spectrum
@@ -15,9 +19,15 @@ def initialise_windows(render_callback):
 
     w_x = spectrum.working_data[:,0].tolist()
     dpg.set_value("original_series", [w_x, spectrum.working_data[:,1].tolist()])
-    filtered = spectrum.get_filterd_data(900)
-    dpg.set_value("filtered_series", [w_x, filtered])
+    dpg.set_value("smoothing_window",  spectrum.smoothing_window)
+    
     dpg.set_value("baseline", [spectrum.baseline[:,0].tolist(), spectrum.baseline[:,1].tolist()])
+    dpg.set_value("baseline_correction_checkbox", spectrum.baseline_toggle)
+    dpg.set_value("baseline_window", spectrum.baseline_window)
+
+    filtered = spectrum.get_filterd_data(spectrum.smoothing_window)
+    dpg.set_value("filtered_series", [w_x, filtered])
+
 
     dpg.set_value("corrected_series_plot2", [spectrum.baseline_corrected[:,0].tolist(), spectrum.baseline_corrected[:,1].tolist()])
     dpg.set_value("corrected_series_plot3", [spectrum.baseline_corrected[:,0].tolist(), spectrum.baseline_corrected[:,1].tolist()])
@@ -28,9 +38,20 @@ def initialise_windows(render_callback):
             dpg.configure_item(f"charges_{i}", default_value = spectrum.matching_data[i][1])
             dpg.configure_item(f"nb_peak_show_{i}", default_value = spectrum.matching_data[i][2])
             draw_mz_lines(sender=None,app_data=None, user_data=(render_callback, i))
-            
+    update_found_peaks_table(render_callback)
+    draw_found_peaks(spectrum)
+    update_user_peaks_table(render_callback)
+    spectrum.baseline_need_update = True
+    dpg.set_value("peak_detection_threshold", spectrum.peak_detection_parameters["threshold"])
+    dpg.set_value("peak_detection_width", spectrum.peak_detection_parameters["width"])
+    dpg.set_value("peak_detection_distance", spectrum.peak_detection_parameters["distance"])
+    dpg.set_value("use_2nd_derivative_checkbox", spectrum.peak_detection_parameters["use_2nd_derivative"])
+    redraw_user_peaks(render_callback)
+    data_clipper(user_data=spectrum)
+    update_peak_starting_points(user_data=render_callback)
 
-def file_dialog(render_callback):   
+
+def file_dialog(render_callback):
     with dpg.file_dialog(directory_selector=False, show=False, user_data=render_callback ,callback=open_file_callback, id="file_dialog_id", width=700 ,height=400):
         dpg.add_file_extension(".csv", color=(110,79,46, 255), custom_text="[csv]")
         dpg.add_file_extension(".xlsx", color=(16,124,65, 255), custom_text="[xlsx]")
@@ -97,12 +118,6 @@ def load_sheet(file_path, render_callback):
     dpg.show_item("file_loading_indicator")
     data = pd.read_excel(file_path, sheet_name=selected_sheet)
     finalise_loading(data, render_callback)
-
-log_string = ""
-def log(message:str) -> None:   
-    global log_string
-    log_string += message + "\n"
-    dpg.set_value("message_box", log_string)
 
 def finalise_loading(df:pd.DataFrame, render_callback):
     spectrum:MSData = render_callback.spectrum

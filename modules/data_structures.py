@@ -17,10 +17,17 @@ class MSData():
         self.baseline_corrected = [[],[]]
         self.peaks: Dict[int : peak_params] = {}
         self.baseline_toggle = False
+        self.baseline_window = 1000
         self.baseline_need_update = False
         self.matching_data = [[],[],[],[],[]]
+        self.peak_detection_parameters = {
+            "threshold": 100,
+            "width": 10,
+            "distance": 10,
+            "use_2nd_derivative": True
+        }
+        self.smoothing_window = 300
 
-                  
     def import_csv(self, path:str):
         return True
     
@@ -36,6 +43,7 @@ class MSData():
         self.working_data = self.original_data[(self.original_data[:,0] > L_clip) & (self.original_data[:,0] < R_clip)]
 
     def get_filterd_data(self, window_length, polyorder=2):
+        self.smoothing_window = window_length
         if(len(self.working_data[:,1]) >= window_length):
             window_length = window_length - 1         
         if window_length % 2 == 0:
@@ -68,7 +76,7 @@ class MSData():
     def correct_baseline(self, window):
         if len(self.original_data) <= 2:
             return
-        
+        self.baseline_window = window
         if not self.baseline_toggle:
             self.baseline_corrected = self.working_data
             self.baseline = np.column_stack((self.working_data[:,0], [0]*len(self.working_data)))
@@ -134,6 +142,9 @@ class MSData():
         self.baseline_toggle = new_data.baseline_toggle
         self.baseline_need_update = new_data.baseline_need_update
         self.matching_data = new_data.matching_data
+        self.smoothing_window = new_data.smoothing_window
+        self.peak_detection_parameters = new_data.peak_detection_parameters
+        self.baseline_window = new_data.baseline_window
         
 
 @dataclass

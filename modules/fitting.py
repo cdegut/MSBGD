@@ -1,12 +1,11 @@
-from turtle import width
-from einops import reduce
 from modules.data_structures import MSData, peak_params
 from typing import Tuple
 import dearpygui.dearpygui as dpg
 from modules.helpers import bi_gaussian
 from scipy.integrate import quad
 import numpy as np
-from modules.intialise import log
+from modules.matching import update_peak_starting_points
+from modules.utils import log
 import threading
 import time
 from scipy.signal import savgol_filter
@@ -119,6 +118,7 @@ def rolling_window_fit(render_callback, iterations = 1000, std =0.25, use_filter
         return
     
     draw_fitted_peaks(None, None, spectrum)
+    update_peak_starting_points(user_data=render_callback)
 
 def draw_residual(x_data, residual):
     dpg.show_item("residual")

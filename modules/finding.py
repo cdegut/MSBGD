@@ -1,9 +1,10 @@
+from turtle import pos
 import dearpygui.dearpygui as dpg
 from modules.data_structures import MSData, peak_params
 from typing import Tuple
 from scipy.signal import find_peaks
 import numpy as np
-from modules.intialise import log
+from modules.utils import log
 from modules.rendercallback import RenderCallback
 peak_width_color = (99, 143, 169,64)
 
@@ -26,14 +27,35 @@ def add_peak(sender, app_data, user_data:RenderCallback):
     mid_spectra = (spectrum.working_data[:,0][0] + spectrum.working_data[:,0][-1]) / 2
     center_slice = spectrum.working_data[:,1][(spectrum.working_data[:,0] > mid_spectra - 0.5) & (spectrum.working_data[:,0] < mid_spectra + 0.5)]
     max_y = max(center_slice) if len(center_slice) > 0 else 0
-    
-    new_peak = peak_params(A_init=max_y, x0_init=mid_spectra, width=width, user_added=True)
+
+    limits = dpg.get_axis_limits("x_axis_plot1")
+    position = (limits[0] + limits[1]) / 2
+
+    new_peak = peak_params(A_init=max_y, x0_init=position, width=width, user_added=True)
 
     spectrum.peaks[new_peak_index] = new_peak
 
-    dpg.add_drag_line(label=f"{new_peak_index}", tag = f"drag_line_{new_peak_index}", parent="data_plot", color=[255, 0, 255, 255], default_value=mid_spectra, callback=drag_peak_callback, user_data=(user_data, new_peak_index))
+    dpg.add_drag_line(label=f"{new_peak_index}", tag = f"drag_line_{new_peak_index}", parent="data_plot", color=[255, 0, 255, 255], default_value=position, callback=drag_peak_callback, user_data=(user_data, new_peak_index))
     update_user_peaks_table(user_data)
-    dpg.draw_line((mid_spectra, 0), (mid_spectra, max_y), parent="data_plot", tag=f"peak_width_{new_peak_index}", color=peak_width_color, thickness=width)
+    dpg.draw_line((position, 0), (position, max_y), parent="data_plot", tag=f"peak_width_{new_peak_index}", color=peak_width_color, thickness=width)
+    
+
+def redraw_user_peaks(render_callback:RenderCallback):
+    spectrum = render_callback.spectrum
+    for alias in dpg.get_aliases():
+        if alias.startswith(f"peak_width_") or alias.startswith(f"drag_line_"):
+            dpg.delete_item(alias)
+
+    for peak in spectrum.peaks:
+        if spectrum.peaks[peak].user_added:
+            x0 = spectrum.peaks[peak].x0_init
+            center_slice = spectrum.working_data[:,1][(spectrum.working_data[:,0] > x0 - 0.5) & (spectrum.working_data[:,0] < x0 + 0.5)]
+            max_y = max(center_slice) if len(center_slice) > 0 else 0
+            width = spectrum.peaks[peak].width
+
+            dpg.add_drag_line(label=f"{peak}", tag = f"drag_line_{peak}", parent="data_plot", color=[255, 0, 255, 255], default_value=x0, callback=drag_peak_callback, user_data=(render_callback, peak))
+            update_user_peaks_table(render_callback)
+            dpg.draw_line((x0, 0), (x0, max_y), parent="data_plot", tag=f"peak_width_{peak}", color=peak_width_color, thickness=width)
 
 def drag_peak_callback(sender, app_data, user_data:RenderCallback):
     spectrum = user_data[0].spectrum
@@ -99,11 +121,19 @@ def peaks_finder_callback(sender, app_data, user_data:RenderCallback):
     distance = dpg.get_value("peak_detection_distance")
     filter_window = dpg.get_value("smoothing_window")
     baseline_window = dpg.get_value("baseline_window")
+    use_derivative2nd = dpg.get_value("use_2nd_derivative_checkbox")
+    # Save parameters
+    spectrum.peak_detection_parameters["threshold"] = int(threshold)
+    spectrum.peak_detection_parameters["width"] = int(width)
+    spectrum.peak_detection_parameters["distance"] = int(distance)
+    spectrum.peak_detection_parameters["use_2nd_derivative"] = use_derivative2nd
+    
+    #Scale with sampling rate
     sampling_rate = np.mean(np.diff(spectrum.working_data[:,0]))
     max_width = 4*width
     width = width / sampling_rate
     distance = distance / sampling_rate
-    peaks_finder(spectrum, threshold, width, max_width, distance, filter_window, baseline_window)
+    peaks_finder(spectrum, threshold, width, max_width, distance, filter_window, baseline_window, use_derivative2nd)
     update_found_peaks_table(user_data)
 
 def update_found_peaks_table(user_data:RenderCallback):
@@ -132,8 +162,7 @@ def tick_peak_callback(sender, app_data, user_data:Tuple[RenderCallback, int]):
     spectrum.peaks[peak].do_not_fit = not spectrum.peaks[peak].do_not_fit
     draw_found_peaks(spectrum)
 
-def peaks_finder(spectrum:MSData, threshold:int, width:int, max_width:int, distance:int, filter_window:int, baseline_window:int):
-    use_derivative2nd = dpg.get_value("use_2nd_derivative_checkbox")
+def peaks_finder(spectrum:MSData, threshold:int, width:int, max_width:int, distance:int, filter_window:int, baseline_window:int, use_derivative2nd:bool=True):
     
     spectrum.correct_baseline(baseline_window)
     baseline = spectrum.baseline[:,1] 
@@ -168,8 +197,12 @@ def peaks_finder(spectrum:MSData, threshold:int, width:int, max_width:int, dista
         sample = spectrum.working_data[:,0][peak - 250:peak + 250]
         sampling_rate = np.mean(np.diff(sample))
         width = peaks_data["widths"][i] * sampling_rate
+        
         if width > max_width:
             width = max_width
+
+        if use_derivative2nd:
+            width = width * 2 #2nd derivative makes peaks thinner
         
         A_init=spectrum.working_data[:,1][peak] - baseline[peak]
         if A_init < threshold:
