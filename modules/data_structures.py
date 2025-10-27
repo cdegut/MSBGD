@@ -90,7 +90,19 @@ class MSData():
             self.baseline_corrected = np.column_stack((self.working_data[:,0], self.working_data[:,1] - bkg_4))
             self.baseline_need_update = False    
         except:
-            return    
+            return 
+
+    def fft_filter_data(self, cutoff_frequency=0.1):
+        if len(self.working_data) <= 2:
+            return
+        y = self.working_data[:,1]
+        n = len(y)
+        y_fft = np.fft.fft(y)
+        frequencies = np.fft.fftfreq(n, d=self.guess_sampling_rate())
+        y_fft[np.abs(frequencies) > cutoff_frequency] = 0
+        y_filtered = np.fft.ifft(y_fft).real
+        self.baseline_corrected = np.column_stack((self.working_data[:,0], y_filtered))
+        return y_fft.tolist()   
     
     def guess_sampling_rate(self):
         if len(self.original_data) <= 2:
@@ -164,6 +176,18 @@ class peak_params:
     do_not_fit: bool = False
     user_added: bool = False
     matched_with: dict = field(default_factory=lambda: [0,0,0]) # set, z, mw
+    fit_quality: dict = field(default_factory=dict)
+
+def fft_filter_data(y_data, cutoff_frequency=0.1, sampling_rate=1.0):
+    if len(y_data) <= 2:
+        return
+    y = y_data
+    n = len(y)
+    y_fft = np.fft.fft(y)
+    frequencies = np.fft.fftfreq(n, d=sampling_rate)
+    y_fft[np.abs(frequencies) > cutoff_frequency] = 0
+    y_filtered = np.fft.ifft(y_fft).real
+    return y_filtered.tolist()
 
 if __name__ == "__main__":
     ms = MSData()

@@ -1,6 +1,5 @@
 from typing import List, Tuple
 import dearpygui.dearpygui as dpg
-from modules.data_structures import MSData
 import numpy as np
 from modules.rendercallback import RenderCallback
 from modules.helpers import bi_gaussian
@@ -23,6 +22,8 @@ def draw_mz_lines(sender = None, app_data = None, user_data:Tuple[RenderCallback
 
     for i in range(nb_peak_show):
         z = charges - i
+        if z == 0:
+            break
         mz = (mw + z*0.007 ) / z
         mz_l.append(mz)
         z_l.append(z)
@@ -123,8 +124,6 @@ def update_peak_starting_points(sender = None, app_data= None, user_data:RenderC
             a = reg.coef_[0]
             b = reg.intercept_
 
-            x0 = -b / a
-
             spectrum.peaks[peak].regression_fct = (a, b)
 
     else:
@@ -176,6 +175,9 @@ def redraw_blocks(render_callback:RenderCallback):
     for peak in spectrum.peaks:
         if not spectrum.peaks[peak].fitted:
             continue
+        if dpg.get_value("hide_high_error"):
+            if spectrum.peaks[peak].fit_quality.get('relative_error', 1.0) > 0.15:
+                continue
         spectrum.peaks[peak].matched_with = [0,0,0]  # Reset matched_with for all peaks
 
         regression_0 = - spectrum.peaks[peak].regression_fct[1] / spectrum.peaks[peak].regression_fct[0]
@@ -235,6 +237,9 @@ def calculate_quality_score(render_callback:RenderCallback, k:int , shift = 0) -
         for peak in spectrum.peaks:
             if not spectrum.peaks[peak].fitted:
                 continue
+            if dpg.get_value("hide_high_error"):
+                if spectrum.peaks[peak].fit_quality.get('relative_error', 1.0) > 0.15:
+                    continue
 
             regression_0 = (- spectrum.peaks[peak].regression_fct[1] / spectrum.peaks[peak].regression_fct[0] )
             z_mz_shifted = z_mz[1] + (shift / z_mz[0])
@@ -336,18 +341,20 @@ def print_to_terminal(sender = None, app_data = None, user_data:RenderCallback =
         group_key = matched[0]
         if group_key not in grouped_peaks:
             grouped_peaks[group_key] = []
+        base = - spectrum.peaks[peak].regression_fct[1] / spectrum.peaks[peak].regression_fct[0]
         grouped_peaks[group_key].append({
             "peak": peak,
             "x0": spectrum.peaks[peak].x0_refined,
             "integral": spectrum.peaks[peak].integral,
-            "matched_with": matched
+            "matched_with": matched,
+            "base": base
         })
 
     for group, peaks in grouped_peaks.items():
         print(f"Mass group {group}: ")
-        print("Peak:\tz:\tM:\tx0:\tIntegral:")
+        print("Peak:\t\tz:\t\tM:\t\tx0:\t\tIntegral:\t\tBase:")
         for p in peaks:
-            print(f"{p['peak']}\t{p['matched_with'][1]}\t{p['matched_with'][2]:.2f}\t{p['x0']:.2f}\t{p['integral']:.2f}")
+            print(f"{p['peak']}\t\t{p['matched_with'][1]}\t\t{p['matched_with'][2]:.2f}\t\t{p['x0']:.2f}\t\t{p['integral']:.2f}\t\t{p['base']:.2f}")
 
     for group, peaks in grouped_peaks.items():
         print(f"Integrals for mass group {group}:")

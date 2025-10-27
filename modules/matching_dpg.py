@@ -20,9 +20,10 @@ def matching_window(render_callback:RenderCallback):
                 dpg.add_input_int(label="m/z", default_value=25,min_value=1 , max_value=200, tag="block_width", width=100)
                 dpg.add_text("Refine within:")
                 dpg.add_input_int(label="Da", default_value=200, min_value=1 , max_value=1000, tag="refinement_width", width=100)
-                dpg.add_checkbox(label="Show x0 projection", default_value=False, tag="show_projection", callback=show_projection, user_data=render_callback)
+                dpg.add_checkbox(label="Show base projection", default_value=False, tag="show_projection", callback=show_projection, user_data=render_callback)
                 # dpg.add_checkbox(label="Show Centers instead", default_value=False, tag="show_centers", callback=update_peak_starting_points, user_data=render_callback)
                 # dpg.add_input_int(label="Width", default_value=1, min_value=1 , max_value=100, tag="center_width", width=100)
+                dpg.add_checkbox(label="Hide High error", default_value=False, tag="hide_high_error", callback=update_peak_starting_points, user_data=render_callback)
                 dpg.add_button(label="Draw MBG", callback=draw_mbg, user_data=render_callback)
                 dpg.add_button(label="Print to term", callback=print_to_terminal, user_data=render_callback)
                 

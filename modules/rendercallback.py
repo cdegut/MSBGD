@@ -5,6 +5,7 @@ import time as time
 import dearpygui.dearpygui as dpg
 
 
+
 @dataclass
 class RenderCallback:
     spectrum:MSData
@@ -23,9 +24,11 @@ class RenderCallback:
         self.baseline_correct_requested = True
     
     def correct_baseline(self):
+        from modules.finding_dpg import move_threshold_callback
         window = dpg.get_value("baseline_window")
         self.spectrum.correct_baseline(window)
         dpg.set_value("baseline", [self.spectrum.baseline[:,0].tolist(), self.spectrum.baseline[:,1].tolist()])
         dpg.set_value("corrected_series_plot2", [self.spectrum.baseline_corrected[:,0].tolist(), self.spectrum.baseline_corrected[:,1].tolist()])
         dpg.set_value("corrected_series_plot3", [self.spectrum.baseline_corrected[:,0].tolist(), self.spectrum.baseline_corrected[:,1].tolist()])
         dpg.set_axis_limits("y_axis_plot2", min(self.spectrum.baseline_corrected[:,1]) - 1, max(self.spectrum.baseline_corrected[:,1]))
+        move_threshold_callback(user_data=self.spectrum)

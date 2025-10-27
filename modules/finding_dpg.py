@@ -1,6 +1,7 @@
 from dearpygui import dearpygui as dpg
 from modules.data_structures import MSData
 from modules.finding import peaks_finder_callback, add_peak
+import matplotlib.pyplot as plt
 
 
 def finding_window(render_callback):
@@ -15,8 +16,7 @@ def finding_window(render_callback):
         with dpg.plot(label="Data Filtering", width=1430, height=600, tag="data_plot") as plot1:
             # Add x and y axes
             x_axis = dpg.add_plot_axis(dpg.mvXAxis, label="m/z", tag= "x_axis_plot1")
-            y_axis = dpg.add_plot_axis(dpg.mvYAxis, label="Y Axis", tag = "y_axis_plot1")
-                       
+            y_axis = dpg.add_plot_axis(dpg.mvYAxis, label="Y Axis", tag = "y_axis_plot1")                       
             dpg.add_line_series([], [], label="Original Data Series", parent=y_axis, tag="original_series")
             dpg.add_line_series([], [], label="Filtered Data Series", parent=y_axis, tag="filtered_series")
             dpg.add_line_series([], [], label="Snip Baseline", parent=y_axis, tag="baseline")
@@ -27,7 +27,7 @@ def finding_window(render_callback):
             with dpg.child_window(height=230, width=300):     
                 dpg.add_text("Data Filtering:")
                 dpg.add_text("Smoothing window:")
-                dpg.add_slider_int(label="", default_value=300, min_value=3, max_value=5000, width=250, callback=filter_data, user_data=spectrum, tag="smoothing_window")
+                dpg.add_slider_int(label="", default_value=300, min_value=4, max_value=5000, width=250, callback=filter_data, user_data=spectrum, tag="smoothing_window")
                 dpg.add_text("")
                 dpg.add_text("Baseline estimation:")
                 with dpg.group(horizontal=True, horizontal_spacing= 50):
@@ -36,14 +36,16 @@ def finding_window(render_callback):
                 dpg.add_slider_int(label="", default_value=1000, min_value=10, max_value=2000, width=250, callback=spectrum.request_baseline_update, user_data=spectrum, tag="baseline_window")
                 dpg.add_checkbox(label="Show Fit Residual", default_value=False, tag="fitting_residual_plot1_checkbox", callback=get_residual)
                 dpg.add_button(label="Calculate 2nd order derivative", callback=sec_order_derivative, user_data=spectrum)
+                dpg.add_button(label="FFT Filter Data", callback=fft_callback, user_data=spectrum)
             with dpg.child_window(height=230, width=300):           
                 dpg.add_text("Peak detection:")
                 dpg.add_text("Peak detection threshold:")
+                dpg.add_slider_int(label="", width=200, default_value=100, min_value=0, max_value=1000, tag="peak_detection_threshold", callback=move_threshold_callback, user_data=spectrum)
                 with dpg.group(horizontal=True, horizontal_spacing= 50):
-                    dpg.add_slider_int(label="", width=200, default_value=100, min_value=1, max_value=1000, tag="peak_detection_threshold", callback=move_threshold_callback)
-                    dpg.add_button(label="Show", callback=show_threshold_callback, tag="show_threshold_button")
+                    dpg.add_checkbox(label="x100", default_value=False, tag="threshold_x100", callback=move_threshold_callback)
+                    dpg.add_button(label="Show", callback=show_threshold_callback, tag="show_threshold_button", user_data=spectrum)
                 dpg.add_text("Peak detection width:")
-                dpg.add_slider_int(label="", width=200, default_value=10, min_value=2, max_value=100, tag="peak_detection_width")
+                dpg.add_slider_int(label="", width=200, default_value=10, min_value=0, max_value=100, tag="peak_detection_width")
                 dpg.add_text("Min Peak Distance:")
                 dpg.add_slider_int(label="", width=200, default_value=10, min_value=1, max_value=100, tag="peak_detection_distance")
                 dpg.add_checkbox(label="Use 2nd order derivative", default_value=True, tag="use_2nd_derivative_checkbox")
@@ -117,27 +119,53 @@ def sec_order_derivative(sender = None, app_data = None, user_data:MSData = None
     derivative2nd = spectrum.get_2nd_derivative(window_length)
     dpg.set_value("derivative2nd", [spectrum.working_data[:,0].tolist(),  derivative2nd])
 
-def show_threshold_callback():
+def show_threshold_callback(sender = None, app_data = None, user_data:MSData = None):
     threshold = dpg.get_value("peak_detection_threshold")
+    if dpg.get_value("threshold_x100"):
+        threshold = threshold * 100
 
     if dpg.does_item_exist("threshold_line_plot1"):
         dpg.delete_item("threshold_line_plot1")
         dpg.set_item_label("show_threshold_button", "Show")
         return
-        
+    
+    dpg.add_line_series([], [], label="Threshold", parent="y_axis_plot1", tag="threshold_line_plot1")
     if not dpg.does_item_exist("threshold_line_theme"):
         with dpg.theme(tag="threshold_line_theme"):       
             with dpg.theme_component(dpg.mvAll):
                 dpg.add_theme_style(dpg.mvPlotStyleVar_LineWeight, 2, category=dpg.mvThemeCat_Plots)
                 dpg.add_theme_color(dpg.mvPlotCol_Line, (255,116,108), category=dpg.mvThemeCat_Plots)
-       
-    dpg.add_line_series([dpg.get_axis_limits("x_axis_plot1")[0], dpg.get_axis_limits("x_axis_plot1")[1]], [threshold, threshold], label="Threshold", parent="y_axis_plot1", tag="threshold_line_plot1")
+    if not dpg.get_value("baseline_correction_checkbox"):
+        dpg.set_value("threshold_line_plot1",[[dpg.get_axis_limits("x_axis_plot1")[0], dpg.get_axis_limits("x_axis_plot1")[1]], [threshold, threshold]])
+    else:
+        dpg.set_value("threshold_line_plot1", [user_data.baseline[:,0].tolist(), (user_data.baseline[:,1] + threshold).tolist()])
     dpg.bind_item_theme("threshold_line_plot1", "threshold_line_theme")
     dpg.set_item_label("show_threshold_button", "Hide")
 
-def move_threshold_callback():
+    
+def move_threshold_callback(sender = None, app_data = None, user_data:MSData = None):
     threshold = float(dpg.get_value("peak_detection_threshold"))
+    if dpg.get_value("threshold_x100"):
+        threshold = threshold * 100
+
     for alias in dpg.get_aliases():
         if alias.startswith("threshold_line_"):
-            dpg.set_value("threshold_line_plot1",[[dpg.get_axis_limits("x_axis_plot1")[0], dpg.get_axis_limits("x_axis_plot1")[1]], [threshold, threshold]])
+            if dpg.get_value("baseline_correction_checkbox"):
+                dpg.set_value("threshold_line_plot1", [user_data.baseline[:,0].tolist(), (user_data.baseline[:,1] + threshold).tolist()])
+            else:
+                dpg.set_value("threshold_line_plot1",[[dpg.get_axis_limits("x_axis_plot1")[0], dpg.get_axis_limits("x_axis_plot1")[1]], [threshold, threshold]])
             return
+
+def fft_callback(sender = None, app_data = None, user_data:MSData = None):
+    spectrum = user_data
+    fft_filtered = spectrum.fft_filter_data()
+        # Create matplotlib popup
+    plt.figure(figsize=(10, 6))
+    #plt.plot(spectrum.working_data[:,0], spectrum.working_data[:,1], label='Original Data', alpha=0.7)
+    plt.plot(spectrum.working_data[:,0], fft_filtered, label='FFT Filtered Data', linewidth=2)
+    plt.xlabel('m/z')
+    plt.ylabel('Intensity')
+    plt.title('FFT Filtered Data')
+    plt.legend()
+    plt.grid(True, alpha=0.3)
+    plt.show()

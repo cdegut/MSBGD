@@ -1,3 +1,4 @@
+from matplotlib import use
 from modules.data_structures import MSData, peak_params
 from typing import Tuple
 import dearpygui.dearpygui as dpg
@@ -21,11 +22,12 @@ def run_fitting(sender = None, app_data = None, user_data:RenderCallback = None)
     dpg.set_value("stop_fitting_checkbox", False)
     dpg.hide_item("start_fitting_button")
     dpg.show_item("stop_fitting_checkbox")
+    use_gaussian = dpg.get_value("use_gaussian")
     if dpg.get_value("show_residual_checkbox"):
         dpg.show_item("residual")
     use_filtered= dpg.get_value("use_filtered")
     user_data.stop_fitting = False
-    rolling_window_fit(render_callback, k, std, use_filtered)
+    rolling_window_fit(render_callback, k, std, use_filtered, use_gaussian)
     dpg.hide_item("stop_fitting_checkbox")
     dpg.hide_item("Fitting_indicator")
     dpg.show_item("start_fitting_button")
@@ -86,7 +88,7 @@ def initial_peaks_parameters(spectrum:MSData, asymmetry = 1.8):
 
     return initial_params, working_peak_list
 
-def rolling_window_fit(render_callback, iterations = 1000, std =0.25, use_filtered = True):
+def rolling_window_fit(render_callback, iterations = 1000, std =0.25, use_filtered = True, use_gaussian = False):
     spectrum = render_callback.spectrum
     baseline_window = dpg.get_value("baseline_window")
     spectrum.correct_baseline(baseline_window)
@@ -110,7 +112,7 @@ def rolling_window_fit(render_callback, iterations = 1000, std =0.25, use_filter
         spectrum.peaks[peak].sampling_rate = sampling_rate
         i += 1
  
-    fit = refine_peak_parameters(working_peak_list, initial_params, render_callback, iterations, std , use_filtered = use_filtered)   
+    fit = refine_peak_parameters(working_peak_list, initial_params, render_callback, iterations, std , use_filtered = use_filtered, use_gaussian=use_gaussian)   
     if fit:
         log("Fitting done with no error")
     else:
@@ -124,12 +126,133 @@ def draw_residual(x_data, residual):
     dpg.show_item("residual")
     dpg.set_value("residual", [x_data, residual])
 
-def refine_peak_parameters(working_peak_list, mbg_params, render_callback:RenderCallback, iterations=1000, std = 0.25, use_filtered = True):
+
+def calculate_fit_quality_metrics(data_x, data_y, spectrum, working_peak_list, rmse_only=False, weights=None):
+    """Calculate comprehensive fit quality metrics"""
+    residual = data_y - spectrum.calculate_mbg(data_x, fitting=True)
+    
+    # 1. Weighted RMSE (higher weight for peak regions)
+    if weights is None:
+        weights = np.ones_like(data_y)
+        for peak in working_peak_list:
+            if spectrum.peaks[peak].fitted:
+                x0 = spectrum.peaks[peak].x0_refined
+                sigma_L = spectrum.peaks[peak].sigma_L
+                sigma_R = spectrum.peaks[peak].sigma_R
+                # Create Gaussian weight centered at peak
+                peak_mask = (data_x >= x0 - 3*sigma_L) & (data_x <= x0 + 3*sigma_R)
+                weights[peak_mask] *= 5.0  # 5x weight for peak regions
+    
+    weighted_rmse = np.sqrt(np.average(np.square(residual), weights=weights))
+    
+    # 2. R-squared (coefficient of determination)
+    ss_res = np.sum(np.square(residual))
+    ss_tot = np.sum(np.square(data_y - np.mean(data_y)))
+    r_squared = 1 - (ss_res / ss_tot) if ss_tot > 0 else 0
+
+    if rmse_only:
+        return {
+            'rmse': np.sqrt(np.mean(np.square(residual))),
+            'weighted_rmse': weighted_rmse,
+            'r_squared': r_squared,
+            'weights': weights
+        }
+    
+    # 3. Chi-squared for noisy data
+    degrees_of_freedom = len(data_y) - (len(working_peak_list) * 4)  
+    # Method 1: Estimate noise from baseline regions
+    noise_mask = np.ones_like(data_y, dtype=bool)
+    for peak in working_peak_list:
+        if spectrum.peaks[peak].fitted:
+            x0 = spectrum.peaks[peak].x0_refined
+            sigma_L = spectrum.peaks[peak].sigma_L
+            sigma_R = spectrum.peaks[peak].sigma_R
+            # Exclude peak regions from noise calculation
+            peak_mask = (data_x >= x0 - 4*sigma_L) & (data_x <= x0 + 4*sigma_R)
+            noise_mask &= ~peak_mask
+    
+    # Estimate noise variance from baseline regions
+    if np.sum(noise_mask) > 10:  # Need enough baseline points
+        baseline_residual = residual[noise_mask]
+        noise_variance = np.var(baseline_residual)
+    else:
+        # Fallback: robust estimate from all residuals using median absolute deviation
+        mad = np.median(np.abs(residual - np.median(residual)))
+        noise_variance = (1.4826 * mad)**2  # Convert MAD to variance estimate
+    
+    # Ensure minimum noise level
+    min_noise = np.var(data_y) * 0.001  # At least 0.1% of signal variance
+    noise_variance = max(noise_variance, min_noise)
+    
+    if degrees_of_freedom > 0:
+        chi_squared_reduced = ss_res / (degrees_of_freedom * noise_variance)
+    else:
+        chi_squared_reduced = np.inf
+    
+    # 4. Peak-specific metrics
+    peak_quality = {}
+    for peak in working_peak_list:
+        x0 = spectrum.peaks[peak].x0_refined
+        sigma_L = spectrum.peaks[peak].sigma_L
+        sigma_R = spectrum.peaks[peak].sigma_R
+        
+        # Peak region mask
+        peak_mask = (data_x >= x0 - 3*sigma_L) & (data_x <= x0 + 3*sigma_R)
+        if np.any(peak_mask):
+            peak_residual = residual[peak_mask]
+            peak_data = data_y[peak_mask]
+            
+            # Signal-to-noise ratio at peak
+            peak_height = spectrum.peaks[peak].A_refined
+            noise_level = np.std(peak_residual)
+            snr = peak_height / noise_level if noise_level > 0 else np.inf
+            
+            # Peak RMSE
+            peak_rmse = np.sqrt(np.mean(np.square(peak_residual)))
+            
+            peak_quality[peak] = {
+                'snr': snr,
+                'peak_rmse': peak_rmse,
+                'relative_error': peak_rmse / peak_height if peak_height > 0 else np.inf
+            }
+    
+    # 5. Akaike Information Criterion (AIC)
+    n = len(data_y)
+    k = len(working_peak_list) * 4  # number of parameters
+    if n > 0 and ss_res > 0:
+        aic = n * np.log(ss_res / n) + 2 * k
+    else:
+        aic = np.inf
+    
+    # 6. Bayesian Information Criterion (BIC)
+    if n > 0 and ss_res > 0:
+        bic = n * np.log(ss_res / n) + k * np.log(n)
+    else:
+        bic = np.inf
+    
+    return {
+        'rmse': np.sqrt(np.mean(np.square(residual))),
+        'weighted_rmse': weighted_rmse,
+        'r_squared': r_squared,
+        'chi_squared_reduced': chi_squared_reduced,
+        'noise_variance': noise_variance,
+        'noise_std': np.sqrt(noise_variance),
+        'signal_to_noise': np.mean(np.abs(data_y)) / np.sqrt(noise_variance),
+        'aic': aic,
+        'bic': bic,
+        'peak_quality': peak_quality,
+        'residual_autocorr': np.corrcoef(residual[:-1], residual[1:])[0,1] if len(residual) > 1 else 0
+    }
+
+
+def refine_peak_parameters(working_peak_list, mbg_params, render_callback:RenderCallback, iterations=1000, std = 0.25, use_filtered = True, use_gaussian = False):
     spectrum = render_callback.spectrum
     original_peaks: Tuple[int, peak_params] = {peak:spectrum.peaks[peak] for peak in working_peak_list}
     data_x = spectrum.working_data[:,0]
     data_y = spectrum.baseline_corrected[:,1]
-    rmse_list = []
+    
+    # Store quality metrics history
+    quality_history = []
     iterations_list = [i for i in range(len(working_peak_list))]
     start = time.time()
     
@@ -141,59 +264,74 @@ def refine_peak_parameters(working_peak_list, mbg_params, render_callback:Render
         data_x = spectrum.baseline_corrected[:,0]
         data_y = spectrum.baseline_corrected[:,1]
     
-
-    for k in range(iterations +1):
+    ## Iteration loop start here
+    ##############################
+    for k in range(iterations + 1):
+        iteration_start = time.time()
         render_callback.execute()
         if dpg.get_value("stop_fitting_checkbox") or render_callback.stop_fitting:
             log("Fitting stopped by user")
             break
-        residual = data_y - spectrum.calculate_mbg(data_x,  fitting=True)
+        
+
+        quality_metrics = calculate_fit_quality_metrics(data_x, data_y, spectrum, working_peak_list, rmse_only=True)
+        quality_history.append(quality_metrics)
+        
+        residual = data_y - spectrum.calculate_mbg(data_x, fitting=True)
         
         if dpg.get_value("show_residual_checkbox"):
             dpg.set_value("residual", [data_x.tolist(), residual.tolist()])
         
-        rmse = np.sqrt(np.mean(np.square(residual)))
-        rmse_list.append(rmse)
+        # Use weighted RMSE for convergence check
+        current_metric = quality_metrics['weighted_rmse']
 
         if k > 10:
-            current_std = np.std(rmse_list[-10:])
-            if current_std < std:
-                time_taken = time.time() - start
-                log(f"Residual is stable. Done. Time taken: {time_taken:.2f} seconds")
-                dpg.set_value("Fitting_indicator_text",f"Residual is stable. Done after {k} iterations. Time taken: {time_taken:.2f} seconds")
+            recent_metrics = [q['weighted_rmse'] for q in quality_history[-10:]]
+            current_std = np.std(recent_metrics)
+        else:
+            current_std = np.inf
+        r_squared = quality_metrics['r_squared']
+
+        dpg.set_value("Fitting_indicator_text",f"Iter {k}: wRMSE={current_metric:.4f}, R²={r_squared:.4f}, Change in error={current_std:.4f}, iteration time: {time.time() - iteration_start:.2f}s")
+        
+        # Check convergence using multiple criteria     
+        if k > 10:   
+            converged = current_std < std and r_squared > 0.90            
+            if converged:
                 break
 
-            dpg.set_value("Fitting_indicator_text",f"Iteration {k}; RMS-Residual: {rmse:.3f} Residual std: {current_std:.3f}")
-
+        # Shuffle iterations order for next pass
         iterations_list = np.random.permutation(iterations_list) #do not use the same order every iteration
-        use_multithreading = dpg.get_value("use_multithreading")
-        if use_multithreading:
-            thread_list = []
-            for i in iterations_list:
-                peak = working_peak_list[i]
-                original_peak = original_peaks[peak]
-                thread = threading.Thread(target=_refine_iteration, args=(peak, data_x, data_y, spectrum, original_peak))
-                thread.start()
-                thread_list.append(thread)
-            
-            for thread in thread_list:
-                thread.join()
-        else:
-            for i in iterations_list:
-                peak = working_peak_list[i]
-                original_peak = original_peaks[peak]
-                _refine_iteration(peak, data_x, data_y , spectrum, original_peak)
-        
-    if k == iterations + 1:
-        dpg.set_value("Fitting_indicator_text", f"Fitting did not converge in {k} iterations")
+        for i in iterations_list:
+            peak = working_peak_list[i]
+            original_peak = original_peaks[peak]
+            _refine_iteration(peak, data_x, data_y , spectrum, original_peak, force_gaussian=use_gaussian)
     
+    ##############################
+    # End of iteration loop
+    ##############################   
+    quality_metrics = calculate_fit_quality_metrics(data_x, data_y, spectrum, working_peak_list)
+    print (quality_metrics)
+    chi_squared =  quality_metrics['chi_squared_reduced']
+
+    signal_to_noise = quality_metrics['signal_to_noise']
+    peaks_error = [quality_metrics["peak_quality"][peak]['relative_error'] for peak in working_peak_list if peak in quality_metrics["peak_quality"]]
+    
+    time_taken = time.time() - start
+    log(f"Converged: R²={r_squared:.4f}, X²r={chi_squared:.3f}, SNR={signal_to_noise:.1f}, Time: {time_taken:.2f}s")
+    dpg.set_value("Fitting_indicator_text",
+        f"Converged after {k} iterations. wRMSE={current_metric:.4f}, R²={r_squared:.4f}, "
+        f"X²r={chi_squared:.3f}, Median peak error={np.median(peaks_error):.4f}, Time: {time_taken:.2f}s")
+    
+    print(quality_metrics["peak_quality"])
     for peak in working_peak_list:
         spectrum.peaks[peak].fitted = True
+        spectrum.peaks[peak].fit_quality = quality_metrics["peak_quality"].get(peak, {})
+
     
     return True
 
-def _refine_iteration(peak:int, data_x, data_y, spectrum:MSData, original_peak):
-         
+def _refine_iteration(peak:int, data_x, data_y, spectrum:MSData, original_peak, force_gaussian = False):     
             x0_fit = spectrum.peaks[peak].x0_refined
             sigma_L_fit = spectrum.peaks[peak].sigma_L
             sigma_R_fit = spectrum.peaks[peak].sigma_R
@@ -212,8 +350,9 @@ def _refine_iteration(peak:int, data_x, data_y, spectrum:MSData, original_peak):
 
             # Sharpen the peak
             for iteration in range(1, 3):
-                L_window = original_peak.sigma_L * iteration
-                R_window = original_peak.sigma_R * iteration
+                min_window = sampling_rate * 3
+                L_window = max(sigma_L_fit * iteration, min_window)
+                R_window = max(sigma_R_fit * iteration, min_window)
                 L_mask = (data_x >= x0_fit - L_window) & (data_x <= x0_fit - L_window/2)
                 R_mask = (data_x >= x0_fit + R_window/2) & (data_x <= x0_fit + R_window)
 
@@ -221,12 +360,19 @@ def _refine_iteration(peak:int, data_x, data_y, spectrum:MSData, original_peak):
                 data_y_L = data_y[L_mask]
                 data_x_R = data_x[R_mask]
                 data_y_R = data_y[R_mask]
+
+                # Check if we have enough data points
+                if len(data_x_L) < 3 or len(data_x_R) < 3:
+                    continue
                 
                 mbg_L = spectrum.calculate_mbg(data_x_L, fitting=True)
                 mbg_R = spectrum.calculate_mbg(data_x_R, fitting=True)
 
                 error_l = np.mean((data_y_L - mbg_L))
                 error_r = np.mean((data_y_R - mbg_R))
+
+                if np.isnan(error_l) or np.isnan(error_r) or np.isinf(error_l) or np.isinf(error_r):
+                    continue
 
 
                 moved = False
@@ -239,9 +385,15 @@ def _refine_iteration(peak:int, data_x, data_y, spectrum:MSData, original_peak):
                         moved = True
 
                 if not moved:
-                    val = 1000 if iteration ==1 else 2000 
-                    sigma_L_fit = sigma_L_fit + error_l/val
-                    sigma_R_fit = sigma_R_fit + error_r/val
+                    val = 1000 if iteration ==1 else 2000
+
+                    max_adjustment = original_peak.width * 0.01  # 1% of original width
+
+                    sigma_L_adjustment = np.clip(error_l/val, -max_adjustment, max_adjustment)
+                    sigma_R_adjustment = np.clip(error_r/val, -max_adjustment, max_adjustment)
+                    
+                    sigma_L_fit = sigma_L_fit + sigma_L_adjustment
+                    sigma_R_fit = sigma_R_fit + sigma_R_adjustment
 
                 # This is supposed to keep the widths in a reasonable range, 
                 # but it cause high asymmetry peak to not fit correctly.
@@ -251,9 +403,18 @@ def _refine_iteration(peak:int, data_x, data_y, spectrum:MSData, original_peak):
                 # if sigma_R_fit > original_peak.width*3:
                 #     sigma_R_fit = sigma_R_fit/2
                 if sigma_L_fit <  sampling_rate:
-                    sigma_L_fit = sampling_rate *4
+                    sigma_L_fit = sampling_rate *3
                 if sigma_R_fit <  sampling_rate:
-                    sigma_R_fit = sampling_rate *4
+                    sigma_R_fit = sampling_rate *3
+                
+                if np.isnan(sigma_L_fit):
+                    sigma_L_fit = sampling_rate *3
+                if np.isnan(sigma_R_fit):
+                    sigma_R_fit = sampling_rate *3
+                
+                if force_gaussian:
+                    sigma_L_fit = (sigma_L_fit + sigma_R_fit) / 2
+                    sigma_R_fit = sigma_L_fit
                 
                 spectrum.peaks[peak].sigma_L = sigma_L_fit
                 spectrum.peaks[peak].sigma_R = sigma_R_fit
@@ -281,7 +442,7 @@ def draw_fitted_peaks(sender = None, app_data = None, user_data:MSData = None, d
     # Generate fitted curve    
     peak_list = []
     mbg_param = []
-    colors = sns.color_palette("viridis", len(spectrum.peaks))
+    colors = sns.color_palette("plasma", 20)
 
     i = 0
     for peak in spectrum.peaks:
@@ -290,8 +451,12 @@ def draw_fitted_peaks(sender = None, app_data = None, user_data:MSData = None, d
             continue
         if not spectrum.peaks[peak].fitted:
             continue
-       
-        color = int(colors[i][0]*255), int(colors[i][1]*255), int(colors[i][2]*255)
+
+        peak_error = spectrum.peaks[peak].fit_quality.get('relative_error', 1.0) * 3
+        normalized_error = np.clip(peak_error, 0, 1)
+        color_idx = int(normalized_error * (len(colors) - 1))      
+        color = [int(c * 255) for c in colors[color_idx]]
+
 
         with dpg.theme(tag = f"fitted_peaks_theme_{peak}"):
             with dpg.theme_component(dpg.mvAll):
@@ -335,11 +500,13 @@ def update_peak_table(spectrum:MSData):
         integral = quad(bi_gaussian, start, end, args=(spectrum.peaks[peak].A_refined, spectrum.peaks[peak].x0_refined, spectrum.
         peaks[peak].sigma_L, spectrum.peaks[peak].sigma_R))[0]
         spectrum.peaks[peak].integral = integral
+        rel_error = spectrum.peaks[peak].fit_quality.get('relative_error', np.nan)
         
         with dpg.table_row(parent = "peak_table"):
             dpg.add_text(f"Peak {peak}")
             dpg.add_text(f"{start:.2f}")
             dpg.add_text(f"{apex:.2f}")
             dpg.add_text(f"{integral:.2f}")
-            dpg.add_text(f"{sigma_L}")
-            dpg.add_text(f"{sigma_R}")
+            dpg.add_text(f"{sigma_L:.4f}")
+            dpg.add_text(f"{sigma_R:.4f}")
+            dpg.add_text(f"{rel_error:.4f}")

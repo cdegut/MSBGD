@@ -1,4 +1,3 @@
-from turtle import pos
 import dearpygui.dearpygui as dpg
 from modules.data_structures import MSData, peak_params
 from typing import Tuple
@@ -122,6 +121,8 @@ def peaks_finder_callback(sender, app_data, user_data:RenderCallback):
     filter_window = dpg.get_value("smoothing_window")
     baseline_window = dpg.get_value("baseline_window")
     use_derivative2nd = dpg.get_value("use_2nd_derivative_checkbox")
+    if dpg.get_value("threshold_x100"):
+        threshold = threshold * 100
     # Save parameters
     spectrum.peak_detection_parameters["threshold"] = int(threshold)
     spectrum.peak_detection_parameters["width"] = int(width)
@@ -133,6 +134,7 @@ def peaks_finder_callback(sender, app_data, user_data:RenderCallback):
     max_width = 4*width
     width = width / sampling_rate
     distance = distance / sampling_rate
+    print("Sampling rate:", sampling_rate, "Width:", width, "Distance:", distance)
     peaks_finder(spectrum, threshold, width, max_width, distance, filter_window, baseline_window, use_derivative2nd)
     update_found_peaks_table(user_data)
 
@@ -200,6 +202,10 @@ def peaks_finder(spectrum:MSData, threshold:int, width:int, max_width:int, dista
         
         if width > max_width:
             width = max_width
+        if width <= 0:
+            width = 1
+        if np.isnan(width):
+            width = 1
 
         if use_derivative2nd:
             width = width * 2 #2nd derivative makes peaks thinner
@@ -235,7 +241,8 @@ def draw_found_peaks(spectrum:MSData):
 
         width = spectrum.peaks[peak].width
 
-        dpg.draw_line((x0, 0), (x0, max_y), parent="data_plot", tag=f"found_peak_line_{peak}", color=color, thickness=1.5)
+        line_thickness = 1.5 if width > 4 else width / 8
+        dpg.draw_line((x0, 0), (x0, max_y), parent="data_plot", tag=f"found_peak_line_{peak}", color=color, thickness=line_thickness)
         dpg.draw_line((x0, 0), (x0, max_y), parent="data_plot", tag=f"found_peak_line_{peak}_width", color=peak_width_color, thickness=width)
         dpg.add_plot_annotation(label=f"{peak}", default_value=(x0, max_y), parent="data_plot", tag=f"found_peak_annotation_{peak}", color=color)
 
