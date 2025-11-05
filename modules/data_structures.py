@@ -213,6 +213,17 @@ class MSData:
         with open(path, "wb") as f:
             pickle.dump(self, f)
 
+    def get_packed_parameters(self) -> List[float]:
+        packed_params = []
+        for peak in self.peaks:
+            if self.peaks[peak].do_not_fit:
+                continue
+            packed_params.append(self.peaks[peak].A_refined)
+            packed_params.append(self.peaks[peak].x0_refined)
+            packed_params.append(self.peaks[peak].sigma_L)
+            packed_params.append(self.peaks[peak].sigma_R)
+        return packed_params
+
     # @staticmethod
     # def load_from_file(path: str) -> "MSData":
     #    """Load an MSData object from a file using pickle."""

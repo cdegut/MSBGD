@@ -1,4 +1,6 @@
+from calendar import c
 from dataclasses import dataclass
+import os
 from typing import Dict, Literal, overload
 import numpy as np
 from modules.data_structures import FitQualityPeakMetrics, MSData, peak_params
@@ -222,8 +224,10 @@ def advanced_statistical_analysis(
     render_callback: RenderCallback,
     macro_iteration=100,
     micro_iteration=10,
-    method: Literal["bootstrap", "initial"] = "bootstrap",
-    check_convergence=False,
+    method: Literal[
+        "bootstrap-parametric", "bootstrap-residual", "initial"
+    ] = "bootstrap-parametric",
+    check_convergence: Literal["wRMSE", "theta-gradient", "both", False] = False,
     convergence_threshold=1e-4,
 ) -> dict:
     """
@@ -251,6 +255,17 @@ def advanced_statistical_analysis(
     # Compute fitted values and residuals
     y_fitted = spectrum.calculate_mbg(data_x, fitting=True)
     residuals = data_y - y_fitted
+    mad = np.median(np.abs(residuals - np.median(residuals)))
+    sigma_hat = 1.4826 * mad
+
+    initial_peaks: dict[int, peak_params] = {}
+    for peak in working_peak_list:
+        initial_peaks[peak] = peak_params(
+            A_refined=spectrum.peaks[peak].A_refined,
+            x0_refined=spectrum.peaks[peak].x0_refined,
+            sigma_L=spectrum.peaks[peak].sigma_L,
+            sigma_R=spectrum.peaks[peak].sigma_R,
+        )
 
     perturbation_results: dict[int, PerturbationFitErrorMetrics] = {
         peak: PerturbationFitErrorMetrics(
@@ -262,101 +277,150 @@ def advanced_statistical_analysis(
     log(f"Starting bootstrap with {macro_iteration} resamples...")
     successful_fits = 0
 
+    noise_scale_A = 0
+    noise_scale_X0 = 0
+    noise_scale_w = 0
+
+    task_pool = []
+    # Thread-safe counters
+    cpu_count = os.cpu_count() or 1
+    completed_lock = Lock()
+    completed_tasks = {"count": 0, "successful": 0}
+
     for b in range(macro_iteration):
-        noise_scale_A = 0.05
-        noise_scale_X0 = 0.05
-        noise_scale_w = 0.1
         working_peaks: Dict[int, peak_params] = {}
-        # Resample residuals with replacement
-        if method == "bootstrap":
+
+        if method == "bootstrap-residual" or method == "bootstrap-parametric":
+            noise_scale_A = 0.0
+            noise_scale_X0 = 0.0
+            noise_scale_w = 0.0
+
             if render_callback:
                 render_callback.execute()
                 dpg.set_value(
                     "Fitting_indicator_text",
-                    f"Bootstrap: {b+1}/{macro_iteration} ({successful_fits} successful)",
+                    f"Setting up Bootstrap 0 to {cpu_count}/{macro_iteration}",
                 )
-            bootstrap_indices = np.random.choice(
-                len(residuals), size=len(residuals), replace=True
-            )
-            resampled_residuals = residuals[bootstrap_indices]
-            data_y = y_fitted + resampled_residuals
 
-            # Reset to perturbed parameters before refitting
+            if method == "bootstrap-parametric":
+                noise = np.random.normal(0, sigma_hat, size=len(residuals))
+                task_data_y = y_fitted + noise
 
-            for peak in working_peak_list:
-                working_peaks[peak] = peak_params(
-                    A_refined=spectrum.peaks[peak].A_refined,
-                    x0_refined=spectrum.peaks[peak].x0_refined,
-                    sigma_L=spectrum.peaks[peak].sigma_L,
-                    sigma_R=spectrum.peaks[peak].sigma_R,
+            else:  # residual bootstrap
+                bootstrap_indices = np.random.choice(
+                    len(residuals), size=len(residuals), replace=True
                 )
+                resampled_residuals = residuals[bootstrap_indices]
+                task_data_y = y_fitted + resampled_residuals
+
         elif method == "initial":
+            noise_scale_A = 0.2
+            noise_scale_X0 = 0.05
+            noise_scale_w = 0.2
 
             if render_callback:
                 render_callback.execute()
                 dpg.set_value(
                     "Fitting_indicator_text",
-                    f"Initial parameter randomization: {b+1}/{macro_iteration} ({successful_fits} successful)",
+                    f"Setting up Initial parameter test task 0 to {cpu_count}/{macro_iteration}",
                 )
-            for peak in working_peak_list:
-                working_peaks[peak] = peak_params(
-                    A_refined=spectrum.peaks[peak].A_init
-                    * (1 + np.random.randn() * noise_scale_A),
-                    x0_refined=spectrum.peaks[peak].x0_init
-                    + (np.random.randn() * spectrum.peaks[peak].width * noise_scale_X0),
-                    sigma_L=spectrum.peaks[peak].sigma_L_init
-                    * (1 + np.random.randn() * noise_scale_w),
-                    sigma_R=spectrum.peaks[peak].sigma_R_init
-                    * (1 + np.random.randn() * noise_scale_w),
-                )
+            task_data_y = data_y
 
-        # Refit with bootstrap data (simplified - fewer iterations)
-        fitted_peaks = quick_fit_model(
-            spectrum,
-            working_peaks,
-            data_x,
-            data_y,
+        for peak in working_peak_list:
+            search_width = spectrum.peaks[peak].sigma_L + spectrum.peaks[peak].sigma_R
+            working_peaks[peak] = peak_params(
+                A_refined=spectrum.peaks[peak].A_init
+                * (1 + np.random.randn() * noise_scale_A),
+                x0_refined=spectrum.peaks[peak].x0_init
+                + (np.random.randn() * search_width * noise_scale_X0),
+                sigma_L=spectrum.peaks[peak].sigma_L_init
+                * (1 + np.random.randn() * noise_scale_w),
+                sigma_R=spectrum.peaks[peak].sigma_R_init
+                * (1 + np.random.randn() * noise_scale_w),
+            )
+
+        task_spectrum = deepcopy(spectrum)
+
+        task = QuickFitInterface(
+            spectrum=task_spectrum,
+            working_peaks=working_peaks,
+            data_x=data_x,
+            data_y=task_data_y,
             n_iterations=micro_iteration,
-            it_index=b,
             check_convergence=check_convergence,
-            convergence_threshold=convergence_threshold,
-            indicator="Fitting_indicator_sub_text",
+            theta_threshold=1e-4,
+            wRMSE_threshold=convergence_threshold,
+            width_regularization=True,
+            it_index=b,
+            indicator=None,
         )
+        task_pool.append(task)
 
-        if not fitted_peaks:
-            continue  # Skip failed fits
-        for peak in fitted_peaks:
-            if spectrum.peak_model == "lorentzian":
-                integral = bi_Lorentzian_integral(
-                    fitted_peaks[peak].A_refined,
-                    fitted_peaks[peak].sigma_L,
-                    fitted_peaks[peak].sigma_R,
-                )
-            else:
-                integral = bi_gaussian_integral(
-                    fitted_peaks[peak].A_refined,
-                    fitted_peaks[peak].sigma_L,
-                    fitted_peaks[peak].sigma_R,
-                )
-            perturbation_results[peak].A.append(fitted_peaks[peak].A_refined)
-            perturbation_results[peak].x0.append(fitted_peaks[peak].x0_refined)
-            perturbation_results[peak].sigma_L.append(fitted_peaks[peak].sigma_L)
-            perturbation_results[peak].sigma_R.append(fitted_peaks[peak].sigma_R)
-            perturbation_results[peak].integral.append(integral)
+    with ThreadPoolExecutor(max_workers=cpu_count) as executor:
+        futures = {executor.submit(execute_quick_fit, task): task for task in task_pool}
 
-        successful_fits += 1
+        for future in as_completed(futures):
+            task = futures[future]
+            fitted_peaks, converged = future.result()
+
+            # Update progress (thread-safe)
+            with completed_lock:
+                completed_tasks["count"] += 1
+                if fitted_peaks != {}:
+                    completed_tasks["successful"] += 1
+
+                # Update GUI
+                if render_callback:
+                    render_callback.execute()
+                    if method == "initial":
+                        dpg.set_value(
+                            "Fitting_indicator_text",
+                            f"Refit with randomisation: {completed_tasks['count']}/{macro_iteration} "
+                            f"({completed_tasks['successful']} successful)",
+                        )
+                    else:
+                        dpg.set_value(
+                            "Fitting_indicator_text",
+                            f"Bootstrap: {completed_tasks['count']}/{macro_iteration} "
+                            f"({completed_tasks['successful']} successful)",
+                        )
+
+                if fitted_peaks == {}:
+                    continue  # Skip failed fits
+                for peak in fitted_peaks:
+                    if spectrum.peak_model == "lorentzian":
+                        integral = bi_Lorentzian_integral(
+                            fitted_peaks[peak].A_refined,
+                            fitted_peaks[peak].sigma_L,
+                            fitted_peaks[peak].sigma_R,
+                        )
+                    else:
+                        integral = bi_gaussian_integral(
+                            fitted_peaks[peak].A_refined,
+                            fitted_peaks[peak].sigma_L,
+                            fitted_peaks[peak].sigma_R,
+                        )
+                    perturbation_results[peak].A.append(fitted_peaks[peak].A_refined)
+                    perturbation_results[peak].x0.append(fitted_peaks[peak].x0_refined)
+                    perturbation_results[peak].sigma_L.append(
+                        fitted_peaks[peak].sigma_L
+                    )
+                    perturbation_results[peak].sigma_R.append(
+                        fitted_peaks[peak].sigma_R
+                    )
+                    perturbation_results[peak].integral.append(integral)
 
     # Compute standard errors from bootstrap distribution
-    result = {}
+    final_result = {}
     for peak in working_peak_list:
         if len(perturbation_results[peak].A) < macro_iteration * 0.5:
             log(
                 f"Warning: Peak {peak} had only {len(perturbation_results[peak].A)} successful fits"
             )
-            result[peak] = None
+            final_result[peak] = None
             continue
 
-        result[peak] = {
+        final_result[peak] = {
             "A": standard_error((perturbation_results[peak].A)),
             "x0": standard_error((perturbation_results[peak].x0)),
             "sigma_L": standard_error((perturbation_results[peak].sigma_L)),
@@ -366,195 +430,38 @@ def advanced_statistical_analysis(
         }
 
     log(f"Perturbation complete: {successful_fits}/{macro_iteration} successful fits")
-    return result
+    return final_result
 
 
-# def advanced_statistical_analysis(
-#     spectrum: MSData,
-#     working_peak_list: list[int],
-#     data_x: np.ndarray,
-#     data_y: np.ndarray,
-#     render_callback: RenderCallback,
-#     macro_iteration=100,
-#     micro_iteration=10,
-#     method: Literal["bootstrap", "initial"] = "bootstrap",
-#     check_convergence=False,
-#     convergence_threshold=1e-4,
-#     max_workers: Optional[int] = None,  # None = auto-detect CPU count
-# ) -> dict:
-#     """
-#     Calculate standard errors via residual bootstrap resampling.
-#     Now parallelized for faster execution.
-#     """
-#     y_fitted = spectrum.calculate_mbg(data_x, fitting=True)
-#     residuals = data_y - y_fitted
-
-#     perturbation_results: dict[int, PerturbationFitErrorMetrics] = {
-#         peak: PerturbationFitErrorMetrics(A=[], x0=[], sigma_L=[], sigma_R=[])
-#         for peak in working_peak_list
-#     }
-
-#     log(f"Starting bootstrap with {macro_iteration} resamples (multithreaded)...")
-#     successful_fits = 0
-#     completed_iterations = 0
-#     lock = Lock()  # Thread-safe counter updates
-
-#     # Create thread pool
-#     with ThreadPoolExecutor(max_workers=4) as executor:
-#         # Submit all iterations
-#         futures = {
-#             executor.submit(
-#                 _perturbation_iteration,
-#                 b,
-#                 method,
-#                 spectrum,
-#                 working_peak_list,
-#                 data_x,
-#                 data_y,
-#                 y_fitted,
-#                 residuals,
-#                 micro_iteration,
-#                 check_convergence,
-#                 convergence_threshold,
-#             ): b
-#             for b in range(macro_iteration)
-#         }
-
-#         # Process completed iterations
-#         for future in as_completed(futures):
-#             iteration_num, fitted_peaks = future.result()
-
-#             with lock:
-#                 completed_iterations += 1
-
-#                 # Update UI
-#                 if render_callback:
-#                     render_callback.execute()
-#                     method_name = (
-#                         "Bootstrap"
-#                         if method == "bootstrap"
-#                         else "Initial parameter randomization"
-#                     )
-#                     dpg.set_value(
-#                         "Fitting_indicator_text",
-#                         f"{method_name}: {completed_iterations}/{macro_iteration} ({successful_fits} successful)",
-#                     )
-
-#                 # Store results
-#                 if fitted_peaks:
-#                     for peak in fitted_peaks:
-#                         perturbation_results[peak].A.append(
-#                             fitted_peaks[peak].A_refined
-#                         )
-#                         perturbation_results[peak].x0.append(
-#                             fitted_peaks[peak].x0_refined
-#                         )
-#                         perturbation_results[peak].sigma_L.append(
-#                             fitted_peaks[peak].sigma_L
-#                         )
-#                         perturbation_results[peak].sigma_R.append(
-#                             fitted_peaks[peak].sigma_R
-#                         )
-#                     successful_fits += 1
-
-#     # Compute standard errors from bootstrap distribution
-#     result = {}
-#     for peak in working_peak_list:
-#         if len(perturbation_results[peak].A) < macro_iteration * 0.5:
-#             log(
-#                 f"Warning: Peak {peak} had only {len(perturbation_results[peak].A)} successful fits"
-#             )
-#             result[peak] = None
-#             continue
-
-#         result[peak] = {
-#             "A": float(np.std(perturbation_results[peak].A)),
-#             "x0": float(np.std(perturbation_results[peak].x0)),
-#             "sigma_L": float(np.std(perturbation_results[peak].sigma_L)),
-#             "sigma_R": float(np.std(perturbation_results[peak].sigma_R)),
-#             "A_ci": (
-#                 float(np.percentile(perturbation_results[peak].A, 2.5)),
-#                 float(np.percentile(perturbation_results[peak].A, 97.5)),
-#             ),
-#             "x0_ci": (
-#                 float(np.percentile(perturbation_results[peak].x0, 2.5)),
-#                 float(np.percentile(perturbation_results[peak].x0, 97.5)),
-#             ),
-#             "n_samples": len(perturbation_results[peak].A),
-#         }
-
-#     log(f"Bootstrap complete: {successful_fits}/{macro_iteration} successful fits")
-#     return result
+@dataclass
+class QuickFitInterface:
+    spectrum: MSData
+    working_peaks: Dict[int, peak_params]
+    data_x: np.ndarray
+    data_y: np.ndarray
+    n_iterations: int
+    check_convergence: Literal["wRMSE", "theta-gradient", "both", False]
+    theta_threshold: float
+    wRMSE_threshold: float
+    width_regularization: bool
+    it_index: int
+    indicator: Optional[str]
 
 
-# def _perturbation_iteration(
-#     iteration: int,
-#     method: Literal["bootstrap", "initial"],
-#     spectrum: MSData,
-#     working_peak_list: list[int],
-#     data_x: np.ndarray,
-#     data_y: np.ndarray,
-#     y_fitted: np.ndarray,
-#     residuals: np.ndarray,
-#     micro_iteration: int,
-#     check_convergence: bool,
-#     convergence_threshold: float,
-#     noise_scale_A: float = 0.05,
-#     noise_scale_X0: float = 0.05,
-#     noise_scale_w: float = 0.1,
-# ) -> tuple[int, Optional[Dict[int, peak_params]]]:
-#     """Single bootstrap iteration - thread-safe worker function"""
-#     try:
-#         working_peaks: Dict[int, peak_params] = {}
-
-#         if method == "bootstrap":
-#             bootstrap_indices = np.random.choice(
-#                 len(residuals), size=len(residuals), replace=True
-#             )
-#             resampled_residuals = residuals[bootstrap_indices]
-#             current_data_y = y_fitted + resampled_residuals
-
-#             for peak in working_peak_list:
-#                 working_peaks[peak] = peak_params(
-#                     A_refined=spectrum.peaks[peak].A_refined,
-#                     # * (1 + np.random.randn() * noise_scale_A),
-#                     x0_refined=spectrum.peaks[peak].x0_refined,
-#                     # + (np.random.randn() * spectrum.peaks[peak].width * noise_scale_X0),
-#                     sigma_L=spectrum.peaks[peak].sigma_L,
-#                     # * (1 + np.random.randn() * noise_scale_w),
-#                     sigma_R=spectrum.peaks[peak].sigma_R,
-#                     # * (1 + np.random.randn() * noise_scale_w),
-#                 )
-#         else:  # method == "initial"
-#             current_data_y = data_y
-#             for peak in working_peak_list:
-#                 working_peaks[peak] = peak_params(
-#                     A_refined=spectrum.peaks[peak].A_init
-#                     * (1 + np.random.randn() * noise_scale_A),
-#                     x0_refined=spectrum.peaks[peak].x0_init
-#                     + (np.random.randn() * spectrum.peaks[peak].width * noise_scale_X0),
-#                     sigma_L=spectrum.peaks[peak].sigma_L_init
-#                     * (1 + np.random.randn() * noise_scale_w),
-#                     sigma_R=spectrum.peaks[peak].sigma_R_init
-#                     * (1 + np.random.randn() * noise_scale_w),
-#                 )
-
-#         fitted_peaks = quick_fit_model(
-#             spectrum,
-#             working_peaks,
-#             data_x,
-#             current_data_y,
-#             n_iterations=micro_iteration,
-#             it_index=iteration,
-#             check_convergence=check_convergence,
-#             convergence_threshold=convergence_threshold,
-#             indicator=None,  # Disable per-thread UI updates
-#         )
-
-#         return iteration, fitted_peaks
-#     except Exception as e:
-#         log(f"Bootstrap iteration {iteration} failed: {e}")
-#         return iteration, None
+def execute_quick_fit(task: QuickFitInterface):
+    return quick_fit_model(
+        task.spectrum,
+        task.working_peaks,
+        task.data_x,
+        task.data_y,
+        task.n_iterations,
+        task.check_convergence,
+        task.theta_threshold,
+        task.wRMSE_threshold,
+        task.width_regularization,
+        task.it_index,
+        task.indicator,
+    )
 
 
 def quick_fit_model(
@@ -563,28 +470,31 @@ def quick_fit_model(
     data_x: np.ndarray,
     data_y: np.ndarray,
     n_iterations=10,
-    check_convergence=False,
-    convergence_threshold: float = 95,
+    check_convergence: Literal["wRMSE", "theta-gradient", "both", False] = False,
+    theta_threshold: float = 1e-4,
+    wRMSE_threshold: float = 1e-4,
     width_regularization: bool = True,
     it_index: int = 0,
     indicator: Optional[str] = None,
-):
+) -> tuple[Dict[int, peak_params], bool]:
     try:
         converged = False
         # Create temporary spectrum copy to avoid modifying the original
-        temp_spectrum = deepcopy(spectrum)
+
         for peak in working_peaks:
-            temp_spectrum.peaks[peak].A_refined = working_peaks[peak].A_refined
-            temp_spectrum.peaks[peak].x0_refined = working_peaks[peak].x0_refined
-            temp_spectrum.peaks[peak].sigma_L = working_peaks[peak].sigma_L
-            temp_spectrum.peaks[peak].sigma_R = working_peaks[peak].sigma_R
-            temp_spectrum.peaks[peak].width = (
+            spectrum.peaks[peak].A_refined = working_peaks[peak].A_refined
+            spectrum.peaks[peak].x0_refined = working_peaks[peak].x0_refined
+            spectrum.peaks[peak].sigma_L = working_peaks[peak].sigma_L
+            spectrum.peaks[peak].sigma_R = working_peaks[peak].sigma_R
+            spectrum.peaks[peak].width = (
                 working_peaks[peak].sigma_L + working_peaks[peak].sigma_R
             )
+
         widths = (-1, -1, -1, -1)
         quality_metrics: Optional[FitQualityMetricsReduced] = None
         # Run a quick refinement (fewer iterations for speed)
         for iteration in range(n_iterations):
+            old_theta = spectrum.get_packed_parameters()
             random_list = np.random.permutation(list(working_peaks.keys()))
             if width_regularization and quality_metrics:
                 widths = (
@@ -599,8 +509,8 @@ def quick_fit_model(
                     peak=peak,
                     data_x=data_x,
                     data_y=data_y,
-                    spectrum=temp_spectrum,
-                    original_peak_width=temp_spectrum.peaks[peak].width,
+                    spectrum=spectrum,
+                    original_peak_width=spectrum.peaks[peak].width,
                     force_gaussian=False,
                     widths=widths,
                 )
@@ -608,32 +518,49 @@ def quick_fit_model(
             quality_metrics = calculate_fit_quality_metrics(
                 data_x,
                 data_y,
-                temp_spectrum,
+                spectrum,
                 list(working_peaks.keys()),
                 rmse_only=True,
             )
             if indicator:
                 dpg.set_value(
                     indicator,
-                    f"Quick fit cycle {it_index}, {iteration+1}/{n_iterations}, RMSE: {quality_metrics.weighted_rmse:.4f} target {convergence_threshold:.4f}",
+                    f"Quick fit cycle {it_index}, {iteration+1}/{n_iterations}, RMSE: {quality_metrics.weighted_rmse:.4f} target {wRMSE_threshold:.4f}",
                 )
 
-            if check_convergence and (
-                quality_metrics.weighted_rmse < convergence_threshold
-            ):
-                converged = True
-                break
+            if check_convergence:
+                rmse_converged = False
+                theta_converged = False
+                if check_convergence == "wRMSE" or check_convergence == "both":
+                    rmse_converged = quality_metrics.weighted_rmse < wRMSE_threshold
+
+                if check_convergence == "theta-gradient" or check_convergence == "both":
+                    new_theta = spectrum.get_packed_parameters()
+                    theta_converged, delta_theta = check_local_convergence(
+                        old_theta,
+                        new_theta,
+                        tol_theta=theta_threshold,
+                    )
+
+                if check_convergence == "both":
+                    converged = bool(rmse_converged and theta_converged)
+                elif check_convergence == "wRMSE":
+                    converged = rmse_converged
+                elif check_convergence == "theta-gradient":
+                    converged = bool(theta_converged)
+                if converged:
+                    break
 
         if check_convergence and not converged:
             log(f"Quick fit iteration {it_index} did not converge")
-            return False
+            # return False
 
         # Store the fitted parameters
         for peak in working_peaks:
-            A = temp_spectrum.peaks[peak].A_refined
-            x0 = temp_spectrum.peaks[peak].x0_refined
-            sigma_L = temp_spectrum.peaks[peak].sigma_L
-            sigma_R = temp_spectrum.peaks[peak].sigma_R
+            A = spectrum.peaks[peak].A_refined
+            x0 = spectrum.peaks[peak].x0_refined
+            sigma_L = spectrum.peaks[peak].sigma_L
+            sigma_R = spectrum.peaks[peak].sigma_R
 
             # Sanity check: reject obviously bad fits
             if (
@@ -650,8 +577,54 @@ def quick_fit_model(
                 working_peaks[peak].sigma_L = sigma_L
                 working_peaks[peak].sigma_R = sigma_R
 
-        return working_peaks
+        return working_peaks, converged
 
     except Exception as e:
-        log(f"Quick fit iteration {it_index} failed: {e}")
-        return False
+        print(f"Quick fit iteration {it_index} failed: {e}")
+        return {}, False
+
+
+def pack_parameters(peaks_dict: dict[int, peak_params]) -> np.ndarray:
+    """Flatten all peak parameters into a single 1D array."""
+    theta = []
+    for pid in sorted(peaks_dict.keys()):
+        p = peaks_dict[pid]
+        theta.extend([p.A_refined, p.x0_refined, p.sigma_L, p.sigma_R])
+    return np.array(theta, dtype=float)
+
+
+def check_local_convergence(theta_old, theta_new, tol_theta=1e-4, eps=1e-12):
+    """
+    Determine whether local optimization has converged.
+
+    Parameters
+    ----------
+    theta_old : np.ndarray
+        Previous parameter vector (flattened).
+    theta_new : np.ndarray
+        New parameter vector after an iteration.
+    tol_theta : float
+        Relative tolerance on parameter change.
+    eps : float
+        Small constant to avoid division by zero.
+
+    Returns
+    -------
+    converged : bool
+        True if both criteria are satisfied.
+    delta_obj : float
+        Relative change in objective (for logging/debug).
+    delta_theta : float
+        Relative change in parameters (for logging/debug).
+    """
+
+    # Parameter change (normalized L2 norm)
+    # Convert to numpy arrays if needed
+    theta_old = np.asarray(theta_old)
+    theta_new = np.asarray(theta_new)
+    diff = np.linalg.norm(theta_new - theta_old)
+    norm = np.linalg.norm(theta_old) + eps
+    delta_theta = diff / norm
+
+    converged = delta_theta < tol_theta
+    return converged, delta_theta

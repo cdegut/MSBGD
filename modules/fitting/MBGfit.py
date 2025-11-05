@@ -301,9 +301,11 @@ def run_advanced_statistical_analysis():
         data_x,
         data_y,
         render_callback,
-        method="bootstrap",
+        method="bootstrap-parametric",
         macro_iteration=200,
-        micro_iteration=5,
+        micro_iteration=k,
+        check_convergence="theta-gradient",
+        convergence_threshold=quality_metrics.weighted_rmse * 1.05,
     )
     errors_random_start = advanced_statistical_analysis(
         spectrum,
@@ -313,7 +315,7 @@ def run_advanced_statistical_analysis():
         render_callback,
         macro_iteration=20,
         micro_iteration=int(k * 1.5),
-        check_convergence=True,
+        check_convergence="both",
         convergence_threshold=quality_metrics.weighted_rmse * 1.05,
         method="initial",
     )
