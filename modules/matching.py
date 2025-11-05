@@ -5,7 +5,7 @@ from typing import List, Tuple
 import dearpygui.dearpygui as dpg
 import numpy as np
 from modules.rendercallback import RenderCallback, get_global_render_callback_ref
-from modules.helpers import bi_gaussian
+from modules.math import bi_gaussian, bi_Lorentzian
 from modules.var import colors_list
 from modules.data_structures import MSData, MatchedWith, get_global_msdata_ref
 
@@ -320,8 +320,6 @@ def series_integral_quality(k: int):
             for m in matched:
                 if m.set == k and m.charge == z_mz[0]:
                     integrals.append(spectrum.peaks[peak].integral)
-    print(f"Series {k} Integrals:")
-    print(integrals)
 
 
 def analyze_series(k: int):
@@ -530,7 +528,6 @@ def check_integral_ratio(render_callback: RenderCallback):
                         / np.sqrt(len(ratio_values))
                     )
                 else:
-                    print("ratios:", ratio_values, "errors:", ratio_ses)
 
                     # Combine both sources of uncertainty:
                     # 1. Measurement uncertainty (from error propagation)
@@ -587,24 +584,19 @@ def print_to_terminal():
                     "peak": peak,
                     "x0": spectrum.peaks[peak].x0_refined,
                     "integral": spectrum.peaks[peak].integral,
+                    "se_integral": spectrum.peaks[peak].se_integral,
                     "matched_with": m,
                     "base": base,
                 }
             )
 
     for group, peaks in grouped_peaks.items():
-        print(f"Mass group {group}: M: {peaks[0]['matched_with'][2]:.2f}")
-        print("Peak:\t\tz:\t\tM/Z:\t\tx0:\t\tIntegral:\t\tBase:")
+        print(f"Mass group {group}: M: {peaks[0]['matched_with'].mw:.2f}")
+        print("Peak:\t\tz:\t\tM/Z:\t\tx0:\t\tIntegral:\t\tIntegralError\t\tBase:")
         for p in peaks:
             print(
-                f"{p['peak']}\t\t{p['matched_with'][1]}\t\t{p['matched_with'][2]/p['matched_with'][1]:.2f}\t\t{p['x0']:.2f}\t\t{p['integral']:.2f}\t\t{p['base']:.2f}"
+                f"{p['peak']}\t\t{p['matched_with'].charge}\t\t{p['matched_with'].mw/p['matched_with'].charge:.2f}\t\t{p['x0']:.2f}\t\t{p['integral']:.2f}\t\t{p['base']:.2f}\t\t{p['se_integral']:.2f}"
             )
-
-    for group, peaks in grouped_peaks.items():
-        print(f"Integrals for mass group {group}:")
-        for p in peaks:
-
-            print(f"{p['integral']:.2f}")
 
 
 def show_matched_peaks(user_data: RenderCallback, clear=False):
@@ -665,7 +657,10 @@ def draw_biG_matched_peaks(user_data: RenderCallback):
             x0 + 5 * sigma_R,
             100,
         )
-        y_data = bi_gaussian(x_data, A, x0, sigma_L, sigma_R)
+        if spectrum.peak_model == "lorentzian":
+            y_data = bi_Lorentzian(x_data, A, x0, sigma_L, sigma_R)
+        else:
+            y_data = bi_gaussian(x_data, A, x0, sigma_L, sigma_R)
 
         dpg.add_shade_series(
             x_data.tolist(),

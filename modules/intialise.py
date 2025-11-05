@@ -10,7 +10,7 @@ from modules.finding import (
     update_user_peaks_table,
     redraw_user_peaks,
 )
-from modules.fitting import update_peak_starting_points
+from modules.fitting.MBGfit import update_peak_starting_points
 from modules.matching_dpg import peak_series_callback
 from modules.utils import log
 
@@ -159,7 +159,6 @@ def open_file_callback(sender, app_data, user_data):
 def open_pkl_callback(sender, app_data, user_data):
     render_callback = user_data
     spectrum: MSData = user_data.spectrum
-    print(spectrum.original_data)
     log(f"Path: {app_data['file_path_name']}")
     spectrum.load_from_file(app_data["file_path_name"])
     initialise_windows(render_callback)

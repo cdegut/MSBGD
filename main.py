@@ -1,6 +1,6 @@
 import dearpygui.dearpygui as dpg
 from modules.data_structures import MSData
-from modules.fitting_dpg import fitting_window
+from modules.fitting.dpg_fitting import fitting_window
 from modules.matching_dpg import matching_window
 from modules.finding_dpg import finding_window
 

@@ -1,0 +1,188 @@
+from modules.data_structures import MSData
+import numpy as np
+
+
+def refine_iteration(
+    peak: int,
+    data_x,
+    data_y,
+    spectrum: MSData,
+    original_peak_width: float,
+    force_gaussian=False,
+    widths=(-1, -1, -1, -1),
+):
+    x0_fit = spectrum.peaks[peak].x0_refined
+    sigma_L_fit = spectrum.peaks[peak].sigma_L
+    sigma_R_fit = spectrum.peaks[peak].sigma_R
+    sampling_rate = spectrum.peaks[peak].sampling_rate
+
+    # Adjust the amplitude
+    R_val = sigma_R_fit / 4 if sigma_R_fit > sampling_rate * 20 else sampling_rate * 5
+    L_val = sigma_L_fit / 4 if sigma_L_fit > sampling_rate * 20 else sampling_rate * 5
+    mask = (data_x >= x0_fit - R_val) & (data_x <= x0_fit + L_val)
+    data_x_peak = data_x[mask]
+    data_y_peak = data_y[mask]
+    if len(data_x_peak) > 0 and len(data_y_peak) > 0:
+        peak_error = np.mean(
+            data_y_peak - spectrum.calculate_mbg(data_x_peak, fitting=True)
+        )
+        spectrum.peaks[peak].A_refined = spectrum.peaks[peak].A_refined + (
+            peak_error / 10
+        )
+
+    # Sharpen the peak
+    for iteration in range(1, 4):
+        min_window = sampling_rate * 3
+        L_window = max(sigma_L_fit * iteration, min_window)
+        R_window = max(sigma_R_fit * iteration, min_window)
+        L_mask = (data_x >= x0_fit - L_window) & (data_x <= x0_fit - L_window / 2)
+        R_mask = (data_x >= x0_fit + R_window / 2) & (data_x <= x0_fit + R_window)
+
+        data_x_L = data_x[L_mask]
+        data_y_L = data_y[L_mask]
+        data_x_R = data_x[R_mask]
+        data_y_R = data_y[R_mask]
+
+        # Check if we have enough data points
+        if len(data_x_L) < 3 or len(data_x_R) < 3:
+            continue
+
+        mbg_L = spectrum.calculate_mbg(data_x_L, fitting=True)
+        mbg_R = spectrum.calculate_mbg(data_x_R, fitting=True)
+
+        error_l = np.mean((data_y_L - mbg_L))
+        error_r = np.mean((data_y_R - mbg_R))
+
+        if (
+            np.isnan(error_l)
+            or np.isnan(error_r)
+            or np.isinf(error_l)
+            or np.isinf(error_r)
+        ):
+            continue
+
+        # Old approach
+        # moved = False
+        if iteration == 1:
+            offset = abs((sigma_L_fit + sigma_R_fit) / 2000)
+            if error_l > 0 and error_r < 0:
+                x0_fit = x0_fit - offset
+                moved = True
+            elif error_l < 0 and error_r > 0:
+                x0_fit = x0_fit + offset
+                moved = True
+        # # New simplified approach
+        # asym_error = error_r - error_l
+        # if iteration == 1:
+        #     offset = abs((sigma_L_fit + sigma_R_fit) / 2000)
+        #     x0_fit = x0_fit + offset * np.sign(asym_error)
+
+        # if not moved:
+        val = 1000 * iteration
+
+        max_adjustment = original_peak_width * 0.01  # 1% of original width
+
+        sigma_L_adjustment = np.clip(error_l / val, -max_adjustment, max_adjustment)
+        sigma_R_adjustment = np.clip(error_r / val, -max_adjustment, max_adjustment)
+
+        sigma_L_fit = sigma_L_fit + sigma_L_adjustment
+        sigma_R_fit = sigma_R_fit + sigma_R_adjustment
+
+        if sigma_L_fit < sampling_rate:
+            sigma_L_fit = sampling_rate * 3
+        if sigma_R_fit < sampling_rate:
+            sigma_R_fit = sampling_rate * 3
+
+        if np.isnan(sigma_L_fit):
+            sigma_L_fit = sampling_rate * 3
+        if np.isnan(sigma_R_fit):
+            sigma_R_fit = sampling_rate * 3
+
+        if force_gaussian:
+            sigma_L_fit = (sigma_L_fit + sigma_R_fit) / 2
+            sigma_R_fit = sigma_L_fit
+
+        # Apply width regularization if enabled
+        if any(w != -1 for w in widths):
+            factor = 4
+            sigma_L_mean, sigma_R_mean, sigma_L_std, sigma_R_std = widths
+
+            # Global regularization
+            if sigma_L_fit > sigma_L_mean + sigma_L_std * factor:
+                sigma_L_fit = sigma_L_fit - sigma_L_std / factor
+            if sigma_L_fit < sigma_L_mean - sigma_L_std * factor:
+                sigma_L_fit = sigma_L_fit + sigma_L_std / factor
+            if sigma_R_fit > sigma_R_mean + sigma_R_std * factor:
+                sigma_R_fit = sigma_R_fit - sigma_R_std / factor
+            if sigma_R_fit < sigma_R_mean - sigma_R_std * factor:
+                sigma_R_fit = sigma_R_fit + sigma_R_std / factor
+
+            # Neighbor-based regularization with push-away mechanism
+            max_width_ratio = 1.7
+            neighbor_distance = original_peak_width * 8
+
+            # Find all neighbors and their distances
+            neighbors = []
+            for close_peak in spectrum.peaks:
+                if close_peak != peak:
+                    distance = abs(spectrum.peaks[close_peak].x0_refined - x0_fit)
+                    if distance < neighbor_distance:
+                        neighbors.append(
+                            {
+                                "index": close_peak,
+                                "distance": distance,
+                                "sigma_L": spectrum.peaks[close_peak].sigma_L,
+                                "sigma_R": spectrum.peaks[close_peak].sigma_R,
+                                "x0": spectrum.peaks[close_peak].x0_refined,
+                            }
+                        )
+
+            if neighbors:
+                # Sort by distance and get two closest
+                neighbors.sort(key=lambda n: n["distance"])
+                closest_neighbors = neighbors[:2]
+
+                # Collect sigmas for regularization
+                neighbor_sigmas_L = [n["sigma_L"] for n in neighbors]
+                neighbor_sigmas_R = [n["sigma_R"] for n in neighbors]
+
+                neighbor_L_median = np.median(neighbor_sigmas_L)
+                neighbor_R_median = np.median(neighbor_sigmas_R)
+
+                # Check if peak is getting too constrained
+                needs_space = (
+                    sigma_L_fit < sigma_L_mean / 2 or sigma_R_fit < sigma_R_mean / 2
+                )
+
+                if needs_space:
+                    # Push away the two closest neighbors slightly
+                    for neighbor in closest_neighbors:
+                        neighbor_idx = neighbor["index"]
+                        if neighbor["x0"] < x0_fit:
+                            # Neighbor is to the left, push it left
+                            spectrum.peaks[neighbor_idx].sigma_R = (
+                                spectrum.peaks[neighbor_idx].sigma_R * 0.99
+                            )
+                        else:
+                            # Neighbor is to the right, push it right
+                            spectrum.peaks[neighbor_idx].sigma_L = (
+                                spectrum.peaks[neighbor_idx].sigma_L * 0.99
+                            )
+                        print(
+                            f"Pushed peak {neighbor_idx} away from peak {peak} for better fitting."
+                        )
+
+                # Apply normal width constraints
+                if sigma_L_fit > neighbor_L_median * max_width_ratio:
+                    sigma_L_fit = neighbor_L_median * max_width_ratio
+                elif sigma_L_fit < neighbor_L_median / max_width_ratio:
+                    sigma_L_fit = neighbor_L_median / max_width_ratio
+
+                if sigma_R_fit > neighbor_R_median * max_width_ratio:
+                    sigma_R_fit = neighbor_R_median * max_width_ratio
+                elif sigma_R_fit < neighbor_R_median / max_width_ratio:
+                    sigma_R_fit = neighbor_R_median / max_width_ratio
+
+        spectrum.peaks[peak].sigma_L = float(sigma_L_fit)
+        spectrum.peaks[peak].sigma_R = float(sigma_R_fit)
+        spectrum.peaks[peak].x0_refined = float(x0_fit)

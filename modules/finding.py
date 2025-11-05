@@ -31,7 +31,6 @@ def add_peak():
     while new_peak_index in existing_peak_indexes:
         new_peak_index += 1
 
-    print("New peak index:", new_peak_index)
     limits = dpg.get_axis_limits("x_axis_plot1")
     position = (limits[0] + limits[1]) / 2
     max_y = get_peak_A_init(spectrum, position)
@@ -228,7 +227,6 @@ def peaks_finder_callback(sender, app_data, user_data: RenderCallback):
     max_width = 4 * width
     width = width / sampling_rate
     distance = distance / sampling_rate
-    print("Sampling rate:", sampling_rate, "Width:", width, "Distance:", distance)
     peaks_finder(
         spectrum,
         threshold,

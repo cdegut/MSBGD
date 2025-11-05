@@ -1,9 +1,9 @@
-from typing import List, Optional
+from typing import List, Literal, Optional
 from pybaselines import Baseline
 from scipy.signal import medfilt
 import numpy as np
 from dataclasses import dataclass
-from modules.helpers import multi_bi_gaussian
+from modules.math import multi_bi_gaussian, multi_bi_Lorentzian
 from typing import Dict, Tuple
 from dataclasses import field
 import pickle
@@ -13,6 +13,7 @@ from whittaker_eilers import WhittakerSmoother
 
 class MSData:
     def __init__(self):
+        self.peak_model: Literal["gaussian", "lorentzian"] = "gaussian"
         self.original_data: np.ndarray = np.empty((0, 2))
         self.working_data: np.ndarray = np.empty((0, 2))
         self.baseline: np.ndarray = np.empty((0, 2))
@@ -201,7 +202,10 @@ class MSData:
                 mbg_params.append(self.peaks[peak].sigma_L)
                 mbg_params.append(self.peaks[peak].sigma_R)
 
-        mbg = multi_bi_gaussian(data_x, *mbg_params)
+        if self.peak_model == "lorentzian":
+            mbg = multi_bi_Lorentzian(data_x, *mbg_params)
+        else:
+            mbg = multi_bi_gaussian(data_x, *mbg_params)
         return mbg
 
     def save_to_file(self, path: str):
@@ -238,6 +242,10 @@ class MSData:
             self.matching_series = new_data.matching_series
         except AttributeError:
             self.matching_series = 3
+        try:
+            self.peak_model = new_data.peak_model
+        except AttributeError:
+            self.peak_model = "gaussian"
 
 
 ms_data_global_ref = MSData()
@@ -252,6 +260,7 @@ class FitQualityPeakMetrics:
     snr: float
     peak_rmse: float
     relative_error: float
+    r_squared: float
 
 
 @dataclass
@@ -264,13 +273,15 @@ class MatchedWith:
 
 @dataclass
 class peak_params:
-    A_init: float
-    x0_init: float
-    width: float
+    A_init: float = 0
+    x0_init: float = 0
+    width: float = 0
     A_refined: float = 0
     x0_refined: float = 0
     sigma_L: float = 0
+    sigma_L_init: float = 0
     sigma_R: float = 0
+    sigma_R_init: float = 0
     se_A: float = 0
     se_x0: float = 0
     se_sigma_L: float = 0
@@ -285,7 +296,7 @@ class peak_params:
     user_added: bool = False
     matched_with: List[MatchedWith] = field(default_factory=lambda: [])
     fit_quality: FitQualityPeakMetrics = field(
-        default_factory=lambda: FitQualityPeakMetrics(0.0, 0.0, 1.0)
+        default_factory=lambda: FitQualityPeakMetrics(0.0, 0.0, 1.0, 0.0)
     )
 
 
