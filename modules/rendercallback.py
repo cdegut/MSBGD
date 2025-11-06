@@ -21,6 +21,7 @@ class RenderCallback:
         self.wd_len: List = []
         self.working_peak_list: List[int] = []
         self.iterations_done: int = 0
+        self.finishing_delta_theta: float = 0.0
 
     def execute(self):
         now = time.time()

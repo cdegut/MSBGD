@@ -97,7 +97,7 @@ def initialise_windows(render_callback):
     )
     redraw_user_peaks(render_callback)
     data_clipper()
-    update_peak_starting_points()
+    update_peak_starting_points(spectrum)
 
 
 def file_dialog(render_callback):

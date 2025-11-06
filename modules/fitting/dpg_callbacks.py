@@ -1,5 +1,6 @@
 import numpy as np
 import dearpygui.dearpygui as dpg
+from sklearn import base
 from modules.fitting.MBGfit import MBG_fit, run_advanced_statistical_analysis
 from modules.fitting.draw_MBG import show_MBG
 from modules.matching import redraw_blocks
@@ -29,7 +30,6 @@ def show_residual_callback(sender, app_data):
 def stop_fitting(sender, app_data, user_data: RenderCallback):
     user_data.stop_fitting = True
     print("Fitting stopped")
-    print(user_data.stop_fitting)
     return
 
 
@@ -88,10 +88,11 @@ def run_fitting_callback(sender, app_data, user_data: RenderCallback):
     render_callback = user_data
     dpg.show_item("Fitting_indicator")
     k = dpg.get_value("fitting_iterations")
-    std = dpg.get_value("fitting_std")
+    theta_threshold = dpg.get_value("theta_threshold_selector") * 1e-5
     dpg.set_value("stop_fitting_checkbox", False)
     dpg.hide_item("start_fitting_button")
     dpg.show_item("stop_fitting_checkbox")
+    dpg.hide_item("advanced_statistical_analysis_button")
     use_gaussian = dpg.get_value("use_gaussian")
 
     if dpg.get_value("show_residual_checkbox"):
@@ -107,12 +108,13 @@ def run_fitting_callback(sender, app_data, user_data: RenderCallback):
     use_filtered = dpg.get_value("use_filtered")
     user_data.stop_fitting = False
     draw_fitted_peaks(delete=True)
-    MBG_fit(render_callback, k, std, use_filtered, use_gaussian)
+    MBG_fit(render_callback, k, theta_threshold, use_filtered, use_gaussian)
     draw_fitted_peaks()
     redraw_blocks()
     dpg.hide_item("stop_fitting_checkbox")
     dpg.hide_item("Fitting_indicator")
     dpg.show_item("start_fitting_button")
+    dpg.show_item("advanced_statistical_analysis_button")
 
 
 def draw_base_projection():
@@ -292,7 +294,12 @@ def update_peak_table(spectrum: MSData):
 
         with dpg.table_row(parent="peak_table"):
             dpg.add_text(f"Peak {peak}")
-            dpg.add_text(f"{regression_0:.2f}")
+            base_text = f"{regression_0:.2f}" + (
+                f" ± {spectrum.peaks[peak].se_base:.2f}"
+                if spectrum.peaks[peak].se_base > 0
+                else ""
+            )
+            dpg.add_text(base_text)
             apex_text = f"{apex:.2f}" + (f" ± {se_x0:.2f}" if se_x0 else "")
             dpg.add_text(apex_text)
             integral_text = f"{integral:.0f}" + (
@@ -316,8 +323,21 @@ def update_peak_table(spectrum: MSData):
 
 
 def run_advanced_statistical_analysis_callback():
+    dpg.show_item("Fitting_indicator")
+    dpg.set_value("stop_fitting_checkbox", False)
+    dpg.hide_item("start_fitting_button")
+    dpg.show_item("stop_fitting_checkbox")
+    dpg.hide_item("advanced_statistical_analysis_button")
+    dpg.set_value(
+        "Fitting_indicator_text",
+        "Running bootstrap and randomisation, this might take a while...",
+    )
     run_advanced_statistical_analysis()
     update_peak_table(get_global_msdata_ref())
+    dpg.hide_item("Fitting_indicator")
+    dpg.show_item("start_fitting_button")
+    dpg.hide_item("stop_fitting_checkbox")
+    dpg.show_item("advanced_statistical_analysis_button")
 
 
 def toggle_lorentzian_peak_model(sender, app_data):

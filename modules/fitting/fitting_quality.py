@@ -3,15 +3,22 @@ from dataclasses import dataclass
 import os
 from typing import Dict, Literal, overload
 import numpy as np
+from sklearn import base
 from modules.data_structures import FitQualityPeakMetrics, MSData, peak_params
-from modules.math import bi_Lorentzian_integral, bi_gaussian_integral, standard_error
+from modules.fitting.peak_starting_points import update_peak_starting_points
+from modules.math import (
+    bi_Lorentzian_integral,
+    bi_gaussian_integral,
+    standard_error,
+    check_theta_convergence,
+)
 from modules.rendercallback import RenderCallback
 from modules.utils import log
 import dearpygui.dearpygui as dpg
 from modules.fitting.refiner import refine_iteration
 from copy import deepcopy
 from typing import Optional
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import ProcessPoolExecutor, as_completed
 from threading import Lock
 
 
@@ -214,6 +221,7 @@ class PerturbationFitErrorMetrics:
     sigma_L: list[float]
     sigma_R: list[float]
     integral: list[float]
+    base: list[float]
 
 
 def advanced_statistical_analysis(
@@ -228,29 +236,10 @@ def advanced_statistical_analysis(
         "bootstrap-parametric", "bootstrap-residual", "initial"
     ] = "bootstrap-parametric",
     check_convergence: Literal["wRMSE", "theta-gradient", "both", False] = False,
-    convergence_threshold=1e-4,
-) -> dict:
-    """
-    Calculate standard errors via residual bootstrap resampling.
-
-    This method:
-    1. Computes residuals from the current fit
-    2. Resamples residuals with replacement
-    3. Adds resampled residuals to the fitted curve
-    4. Refits the model to the synthetic data
-    5. Repeats and computes standard deviation of parameters
-
-    Args:
-        spectrum: MSData object with fitted peaks
-        working_peak_list: List of peak indices to analyze
-        data_x: X-axis data
-        data_y: Y-axis data (observed)
-        macro_iteration: Number of bootstrap samples (50-200 typical)
-        render_callback: Optional callback for progress updates
-
-    Returns:
-        dict: Standard errors for each peak's parameters
-    """
+    wRMSE_threshold: float = 100.0,
+    theta_threshold: float = 1e-4,
+) -> dict | Literal[False]:
+    """Perform advanced statistical analysis using bootstrap and random start methods."""
 
     # Compute fitted values and residuals
     y_fitted = spectrum.calculate_mbg(data_x, fitting=True)
@@ -269,7 +258,7 @@ def advanced_statistical_analysis(
 
     perturbation_results: dict[int, PerturbationFitErrorMetrics] = {
         peak: PerturbationFitErrorMetrics(
-            A=[], x0=[], sigma_L=[], sigma_R=[], integral=[]
+            A=[], x0=[], sigma_L=[], sigma_R=[], integral=[], base=[]
         )
         for peak in working_peak_list
     }
@@ -277,138 +266,205 @@ def advanced_statistical_analysis(
     log(f"Starting bootstrap with {macro_iteration} resamples...")
     successful_fits = 0
 
-    noise_scale_A = 0
-    noise_scale_X0 = 0
-    noise_scale_w = 0
-
     task_pool = []
     # Thread-safe counters
-    cpu_count = os.cpu_count() or 1
+    cpu_count = os.cpu_count() or 2
     completed_lock = Lock()
-    completed_tasks = {"count": 0, "successful": 0}
+    completed_tasks = {"count": 0, "successful": 0, "rejected": 0}
+    BATCH_SIZE = min(cpu_count * 2, 50)  # Process 4x CPU cores or max 50 at once
+    num_batches = (macro_iteration + BATCH_SIZE - 1) // BATCH_SIZE
 
-    for b in range(macro_iteration):
-        working_peaks: Dict[int, peak_params] = {}
+    avg_iterations = None
+    batch_iterations = []
+    rescale = 1.0
 
-        if method == "bootstrap-residual" or method == "bootstrap-parametric":
-            noise_scale_A = 0.0
-            noise_scale_X0 = 0.0
-            noise_scale_w = 0.0
-
-            if render_callback:
-                render_callback.execute()
-                dpg.set_value(
-                    "Fitting_indicator_text",
-                    f"Setting up Bootstrap 0 to {cpu_count}/{macro_iteration}",
-                )
-
-            if method == "bootstrap-parametric":
-                noise = np.random.normal(0, sigma_hat, size=len(residuals))
-                task_data_y = y_fitted + noise
-
-            else:  # residual bootstrap
-                bootstrap_indices = np.random.choice(
-                    len(residuals), size=len(residuals), replace=True
-                )
-                resampled_residuals = residuals[bootstrap_indices]
-                task_data_y = y_fitted + resampled_residuals
-
-        elif method == "initial":
-            noise_scale_A = 0.2
-            noise_scale_X0 = 0.05
-            noise_scale_w = 0.2
-
-            if render_callback:
-                render_callback.execute()
-                dpg.set_value(
-                    "Fitting_indicator_text",
-                    f"Setting up Initial parameter test task 0 to {cpu_count}/{macro_iteration}",
-                )
-            task_data_y = data_y
-
-        for peak in working_peak_list:
-            search_width = spectrum.peaks[peak].sigma_L + spectrum.peaks[peak].sigma_R
-            working_peaks[peak] = peak_params(
-                A_refined=spectrum.peaks[peak].A_init
-                * (1 + np.random.randn() * noise_scale_A),
-                x0_refined=spectrum.peaks[peak].x0_init
-                + (np.random.randn() * search_width * noise_scale_X0),
-                sigma_L=spectrum.peaks[peak].sigma_L_init
-                * (1 + np.random.randn() * noise_scale_w),
-                sigma_R=spectrum.peaks[peak].sigma_R_init
-                * (1 + np.random.randn() * noise_scale_w),
+    if method == "bootstrap-parametric" or method == "bootstrap-residual":
+        it = 0
+        for test in range(0, 10):
+            dpg.set_value(
+                "Fitting_indicator_sub_text",
+                (
+                    f"Running initial rescale tests {test}/10 "
+                    + (f"last it: {it} rescale: {rescale:.2f}" if it else "")
+                ),
+            )
+            if dpg.does_alias_exist("noise"):
+                dpg.delete_item("noise")
+            dpg.add_line_series(
+                x=residuals.tolist(),
+                y=(np.random.normal(0, sigma_hat, size=len(residuals)) + 250).tolist(),
+                label="MBG",
+                parent="y_axis_plot2",
+                tag="noise",
+                show=False,
             )
 
-        task_spectrum = deepcopy(spectrum)
+            test_task = _make_bootstrap_task(
+                spectrum=spectrum,
+                working_peak_list=working_peak_list,
+                data_x=data_x,
+                method=method,
+                b=test,
+                y_fitted=y_fitted,
+                wRMSE_threshold=wRMSE_threshold,
+                residuals=residuals,
+                sigma_hat=float(sigma_hat),
+                rescale=rescale,
+                micro_iteration=25,
+                check_convergence=check_convergence,
+                theta_threshold=theta_threshold,
+            )
+            _, _, it = execute_quick_fit(test_task)
 
-        task = QuickFitInterface(
-            spectrum=task_spectrum,
-            working_peaks=working_peaks,
-            data_x=data_x,
-            data_y=task_data_y,
-            n_iterations=micro_iteration,
-            check_convergence=check_convergence,
-            theta_threshold=1e-4,
-            wRMSE_threshold=convergence_threshold,
-            width_regularization=True,
-            it_index=b,
-            indicator=None,
-        )
-        task_pool.append(task)
+            if 5 < it > 10:
+                break
+            if it > 10:
+                rescale = rescale * 0.75
+            elif it > 24:
+                rescale = rescale * 0.5
+            elif it < 5:
+                rescale = rescale * 1.25
+            elif it <= 2:
+                rescale = rescale * 2.0
 
-    with ThreadPoolExecutor(max_workers=cpu_count) as executor:
-        futures = {executor.submit(execute_quick_fit, task): task for task in task_pool}
+    for batch_idx in range(num_batches):
+        start_idx = batch_idx * BATCH_SIZE
+        end_idx = min(start_idx + BATCH_SIZE, macro_iteration)
 
-        for future in as_completed(futures):
-            task = futures[future]
-            fitted_peaks, converged = future.result()
+        if batch_iterations != []:
+            avg_iterations = int(np.mean(batch_iterations))
+            batch_iterations = []
 
-            # Update progress (thread-safe)
-            with completed_lock:
-                completed_tasks["count"] += 1
-                if fitted_peaks != {}:
-                    completed_tasks["successful"] += 1
+        if avg_iterations is not None:
+            if avg_iterations > 15:
+                rescale = rescale * 0.75
+            elif avg_iterations > 25:
+                rescale = rescale * 0.5
+            elif avg_iterations < 5:
+                rescale = rescale * 1.25
+            elif avg_iterations <= 2:
+                rescale = rescale * 2.0
 
-                # Update GUI
-                if render_callback:
-                    render_callback.execute()
-                    if method == "initial":
-                        dpg.set_value(
-                            "Fitting_indicator_text",
-                            f"Refit with randomisation: {completed_tasks['count']}/{macro_iteration} "
-                            f"({completed_tasks['successful']} successful)",
+        if render_callback:
+            dpg.set_value(
+                "Fitting_indicator_sub_text",
+                (
+                    f"Running {start_idx} to {end_idx}"
+                    + f" average iter last batch: {avg_iterations} rescale: {rescale:.2f}"
+                    if avg_iterations and method != "initial"
+                    else ""
+                ),
+            )
+
+        task_pool = []
+        for b in range(start_idx, end_idx):
+            if method == "bootstrap-parametric" or method == "bootstrap-residual":
+                task = _make_bootstrap_task(
+                    spectrum=spectrum,
+                    working_peak_list=working_peak_list,
+                    data_x=data_x,
+                    method=method,
+                    b=b,
+                    y_fitted=y_fitted,
+                    wRMSE_threshold=wRMSE_threshold,
+                    residuals=residuals,
+                    sigma_hat=float(sigma_hat),
+                    rescale=rescale,
+                    micro_iteration=micro_iteration,
+                    check_convergence=check_convergence,
+                    theta_threshold=theta_threshold,
+                )
+
+            elif method == "initial":
+                task = _make_initial_refit_task(
+                    spectrum=spectrum,
+                    working_peak_list=working_peak_list,
+                    data_x=data_x,
+                    data_y=data_y,
+                    b=b,
+                    micro_iteration=micro_iteration,
+                    check_convergence=check_convergence,
+                    wRMSE_threshold=wRMSE_threshold,
+                    theta_threshold=theta_threshold,
+                )
+
+            task_pool.append(task)
+
+        with ProcessPoolExecutor(max_workers=cpu_count) as executor:
+            futures = {
+                executor.submit(execute_quick_fit, task): task for task in task_pool
+            }
+
+            for future in as_completed(futures):
+                task = futures[future]
+                fitted_peaks, converged, iteration = future.result()
+
+                # Update progress (thread-safe)
+                with completed_lock:
+                    completed_tasks["count"] += 1
+                    if converged:
+                        completed_tasks["successful"] += 1
+                    batch_iterations.append((iteration))
+
+                    # Update GUI
+                    if render_callback:
+                        render_callback.execute()
+                        if dpg.get_value("stop_fitting_checkbox"):
+                            log("Fitting stopped by user.")
+                            dpg.set_value("Fitting_indicator_text", "Stopping ...")
+                            # Cancel remaining futures
+                            for f in futures:
+                                f.cancel()
+                            executor.shutdown(wait=False, cancel_futures=True)
+
+                            return False
+
+                        if method == "initial":
+                            dpg.set_value(
+                                "Fitting_indicator_text",
+                                f"Refit with randomisation: {completed_tasks['count']}/{macro_iteration} "
+                                f"({completed_tasks['successful']} converged, {completed_tasks['rejected']} rejected)",
+                            )
+                        else:
+                            dpg.set_value(
+                                "Fitting_indicator_text",
+                                f"Bootstrap: {completed_tasks['count']}/{macro_iteration} "
+                                f"({completed_tasks['successful']} successful)",
+                            )
+
+                    if fitted_peaks == {}:
+                        completed_tasks["rejected"] += 1
+                        continue  # Skip failed fits
+                    for peak in fitted_peaks:
+                        if spectrum.peak_model == "lorentzian":
+                            integral = bi_Lorentzian_integral(
+                                fitted_peaks[peak].A_refined,
+                                fitted_peaks[peak].sigma_L,
+                                fitted_peaks[peak].sigma_R,
+                            )
+                        else:
+                            integral = bi_gaussian_integral(
+                                fitted_peaks[peak].A_refined,
+                                fitted_peaks[peak].sigma_L,
+                                fitted_peaks[peak].sigma_R,
+                            )
+                        perturbation_results[peak].A.append(
+                            fitted_peaks[peak].A_refined
                         )
-                    else:
-                        dpg.set_value(
-                            "Fitting_indicator_text",
-                            f"Bootstrap: {completed_tasks['count']}/{macro_iteration} "
-                            f"({completed_tasks['successful']} successful)",
+                        perturbation_results[peak].x0.append(
+                            fitted_peaks[peak].x0_refined
                         )
-
-                if fitted_peaks == {}:
-                    continue  # Skip failed fits
-                for peak in fitted_peaks:
-                    if spectrum.peak_model == "lorentzian":
-                        integral = bi_Lorentzian_integral(
-                            fitted_peaks[peak].A_refined,
-                            fitted_peaks[peak].sigma_L,
-                            fitted_peaks[peak].sigma_R,
+                        perturbation_results[peak].sigma_L.append(
+                            fitted_peaks[peak].sigma_L
                         )
-                    else:
-                        integral = bi_gaussian_integral(
-                            fitted_peaks[peak].A_refined,
-                            fitted_peaks[peak].sigma_L,
-                            fitted_peaks[peak].sigma_R,
+                        perturbation_results[peak].sigma_R.append(
+                            fitted_peaks[peak].sigma_R
                         )
-                    perturbation_results[peak].A.append(fitted_peaks[peak].A_refined)
-                    perturbation_results[peak].x0.append(fitted_peaks[peak].x0_refined)
-                    perturbation_results[peak].sigma_L.append(
-                        fitted_peaks[peak].sigma_L
-                    )
-                    perturbation_results[peak].sigma_R.append(
-                        fitted_peaks[peak].sigma_R
-                    )
-                    perturbation_results[peak].integral.append(integral)
+                        perturbation_results[peak].integral.append(integral)
+                        perturbation_results[peak].base.append(
+                            -fitted_peaks[peak].regression_fct[1]
+                            / fitted_peaks[peak].regression_fct[0]
+                        )
 
     # Compute standard errors from bootstrap distribution
     final_result = {}
@@ -427,9 +483,13 @@ def advanced_statistical_analysis(
             "sigma_R": standard_error((perturbation_results[peak].sigma_R)),
             "integral": standard_error((perturbation_results[peak].integral)),
             "n_samples": len(perturbation_results[peak].A),
+            "base": standard_error((perturbation_results[peak].base)),
         }
+    if dpg.does_alias_exist("noise"):
+        dpg.delete_item("noise")
 
     log(f"Perturbation complete: {successful_fits}/{macro_iteration} successful fits")
+
     return final_result
 
 
@@ -445,7 +505,6 @@ class QuickFitInterface:
     wRMSE_threshold: float
     width_regularization: bool
     it_index: int
-    indicator: Optional[str]
 
 
 def execute_quick_fit(task: QuickFitInterface):
@@ -460,7 +519,6 @@ def execute_quick_fit(task: QuickFitInterface):
         task.wRMSE_threshold,
         task.width_regularization,
         task.it_index,
-        task.indicator,
     )
 
 
@@ -475,8 +533,8 @@ def quick_fit_model(
     wRMSE_threshold: float = 1e-4,
     width_regularization: bool = True,
     it_index: int = 0,
-    indicator: Optional[str] = None,
-) -> tuple[Dict[int, peak_params], bool]:
+) -> tuple[Dict[int, peak_params], bool, int]:
+    iteration = 0
     try:
         converged = False
         # Create temporary spectrum copy to avoid modifying the original
@@ -522,11 +580,6 @@ def quick_fit_model(
                 list(working_peaks.keys()),
                 rmse_only=True,
             )
-            if indicator:
-                dpg.set_value(
-                    indicator,
-                    f"Quick fit cycle {it_index}, {iteration+1}/{n_iterations}, RMSE: {quality_metrics.weighted_rmse:.4f} target {wRMSE_threshold:.4f}",
-                )
 
             if check_convergence:
                 rmse_converged = False
@@ -536,7 +589,7 @@ def quick_fit_model(
 
                 if check_convergence == "theta-gradient" or check_convergence == "both":
                     new_theta = spectrum.get_packed_parameters()
-                    theta_converged, delta_theta = check_local_convergence(
+                    theta_converged, delta_theta = check_theta_convergence(
                         old_theta,
                         new_theta,
                         tol_theta=theta_threshold,
@@ -552,10 +605,38 @@ def quick_fit_model(
                     break
 
         if check_convergence and not converged:
-            log(f"Quick fit iteration {it_index} did not converge")
-            # return False
+            full_quality_metrics = calculate_fit_quality_metrics(
+                data_x,
+                data_y,
+                spectrum,
+                list(working_peaks.keys()),
+            )
+
+            print(
+                f"Quick fit did not converge in {n_iterations} iterations \n",
+                "chi squared:",
+                full_quality_metrics.chi_squared_reduced,
+                "\n",
+                "R²:",
+                full_quality_metrics.r_squared,
+                "\n",
+                "wRMSE:",
+                full_quality_metrics.weighted_rmse,
+                f"/ {wRMSE_threshold} \n",
+                "RMSE:",
+                full_quality_metrics.rmse,
+                "\n",
+            )
+            if (
+                full_quality_metrics.chi_squared_reduced > 1.0
+                or full_quality_metrics.r_squared < 0.8
+                or full_quality_metrics.weighted_rmse > wRMSE_threshold
+            ):
+                print("Very poor fit detected, rejecting results.")
+                return {}, False, iteration
 
         # Store the fitted parameters
+        update_peak_starting_points(spectrum)
         for peak in working_peaks:
             A = spectrum.peaks[peak].A_refined
             x0 = spectrum.peaks[peak].x0_refined
@@ -576,12 +657,13 @@ def quick_fit_model(
                 working_peaks[peak].x0_refined = x0
                 working_peaks[peak].sigma_L = sigma_L
                 working_peaks[peak].sigma_R = sigma_R
+                working_peaks[peak].regression_fct = spectrum.peaks[peak].regression_fct
 
-        return working_peaks, converged
+        return working_peaks, converged, iteration
 
     except Exception as e:
         print(f"Quick fit iteration {it_index} failed: {e}")
-        return {}, False
+        return {}, False, iteration
 
 
 def pack_parameters(peaks_dict: dict[int, peak_params]) -> np.ndarray:
@@ -593,38 +675,113 @@ def pack_parameters(peaks_dict: dict[int, peak_params]) -> np.ndarray:
     return np.array(theta, dtype=float)
 
 
-def check_local_convergence(theta_old, theta_new, tol_theta=1e-4, eps=1e-12):
-    """
-    Determine whether local optimization has converged.
+def _make_bootstrap_task(
+    method: Literal["bootstrap-parametric", "bootstrap-residual"],
+    b: int,
+    spectrum: MSData,
+    working_peak_list: list[int],
+    data_x: np.ndarray,
+    rescale: float,
+    residuals: np.ndarray,
+    y_fitted: np.ndarray,
+    sigma_hat: float,
+    micro_iteration: int,
+    check_convergence: Literal["wRMSE", "theta-gradient", "both", False],
+    theta_threshold: float,
+    wRMSE_threshold: float,
+):
+    working_peaks: Dict[int, peak_params] = {}
+    if method == "bootstrap-residual" or method == "bootstrap-parametric":
+        noise_scale_A = 0.01 * rescale
+        noise_scale_X0 = 0.02 * rescale
+        noise_scale_w = 0.02 * rescale
 
-    Parameters
-    ----------
-    theta_old : np.ndarray
-        Previous parameter vector (flattened).
-    theta_new : np.ndarray
-        New parameter vector after an iteration.
-    tol_theta : float
-        Relative tolerance on parameter change.
-    eps : float
-        Small constant to avoid division by zero.
+        if method == "bootstrap-parametric":
+            noise = np.random.normal(0, sigma_hat, size=len(residuals))
+            task_data_y = y_fitted + noise
 
-    Returns
-    -------
-    converged : bool
-        True if both criteria are satisfied.
-    delta_obj : float
-        Relative change in objective (for logging/debug).
-    delta_theta : float
-        Relative change in parameters (for logging/debug).
-    """
+        else:  # residual bootstrap
+            bootstrap_indices = np.random.choice(
+                len(residuals), size=len(residuals), replace=True
+            )
+            resampled_residuals = residuals[bootstrap_indices]
+            task_data_y = y_fitted + resampled_residuals
 
-    # Parameter change (normalized L2 norm)
-    # Convert to numpy arrays if needed
-    theta_old = np.asarray(theta_old)
-    theta_new = np.asarray(theta_new)
-    diff = np.linalg.norm(theta_new - theta_old)
-    norm = np.linalg.norm(theta_old) + eps
-    delta_theta = diff / norm
+        for peak in working_peak_list:
+            search_width = spectrum.peaks[peak].sigma_L + spectrum.peaks[peak].sigma_R
+            working_peaks[peak] = peak_params(
+                A_refined=spectrum.peaks[peak].A_refined
+                * (1 + np.random.randn() * noise_scale_A),
+                x0_refined=spectrum.peaks[peak].x0_refined
+                + (np.random.randn() * search_width * noise_scale_X0),
+                sigma_L=spectrum.peaks[peak].sigma_L
+                * (1 + np.random.randn() * noise_scale_w),
+                sigma_R=spectrum.peaks[peak].sigma_R
+                * (1 + np.random.randn() * noise_scale_w),
+            )
+        task_spectrum = deepcopy(spectrum)
 
-    converged = delta_theta < tol_theta
-    return converged, delta_theta
+        task = QuickFitInterface(
+            spectrum=task_spectrum,
+            working_peaks=working_peaks,
+            data_x=data_x.copy(),
+            data_y=task_data_y,
+            n_iterations=micro_iteration,
+            check_convergence=check_convergence,
+            theta_threshold=theta_threshold,
+            wRMSE_threshold=wRMSE_threshold,
+            width_regularization=True,
+            it_index=b,
+        )
+
+        return task
+
+
+def _make_initial_refit_task(
+    data_y: np.ndarray,
+    b: int,
+    spectrum: MSData,
+    working_peak_list: list[int],
+    data_x: np.ndarray,
+    micro_iteration: int,
+    check_convergence: Literal["wRMSE", "theta-gradient", "both", False],
+    theta_threshold: float,
+    wRMSE_threshold: float,
+):
+    working_peaks: Dict[int, peak_params] = {}
+    noise_scale_A = 0.2
+    noise_scale_X0 = 0.1
+    noise_scale_w = 0.2  # this is the critical value
+
+    task_data_y = data_y.copy()
+    task_spectrum = deepcopy(spectrum)
+
+    for peak in working_peak_list:
+        search_width = spectrum.peaks[peak].sigma_L + spectrum.peaks[peak].sigma_R
+        noise_scale_X0_applied = (
+            noise_scale_X0 if peak < 500 else noise_scale_X0 * 2.0
+        )  # be harder on user added peaks
+        working_peaks[peak] = peak_params(
+            A_refined=spectrum.peaks[peak].A_init
+            * (1 + np.random.randn() * noise_scale_A),
+            x0_refined=spectrum.peaks[peak].x0_init
+            + (np.random.randn() * search_width * noise_scale_X0_applied),
+            sigma_L=spectrum.peaks[peak].sigma_L_init
+            * (1 + np.random.randn() * noise_scale_w),
+            sigma_R=spectrum.peaks[peak].sigma_R_init
+            * (1 + np.random.randn() * noise_scale_w),
+        )
+    task = QuickFitInterface(
+        spectrum=task_spectrum,
+        working_peaks=working_peaks,
+        data_x=data_x.copy(),
+        data_y=task_data_y,
+        n_iterations=micro_iteration,
+        check_convergence=check_convergence,
+        theta_threshold=theta_threshold,
+        wRMSE_threshold=wRMSE_threshold,
+        width_regularization=True,
+        it_index=b,
+    )
+
+    return task

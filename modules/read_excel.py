@@ -11,7 +11,6 @@ sheet_names = xls.sheet_names
 def load_sheet(sender, app_data, user_data):
     selected_sheet = dpg.get_value("sheet_selector")
     df = pd.read_excel(file_path, sheet_name=selected_sheet)
-    print(df)
 
 
 dpg.create_context()

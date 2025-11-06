@@ -303,6 +303,7 @@ class peak_params:
     se_integral: float = 0
     start_range: Tuple[float, float] = (0.0, 0.0)
     regression_fct: Tuple[float, float] = (1.0, 0.0)
+    se_base: float = 0.0
     do_not_fit: bool = False
     user_added: bool = False
     matched_with: List[MatchedWith] = field(default_factory=lambda: [])

@@ -17,8 +17,8 @@ def refine_iteration(
     sampling_rate = spectrum.peaks[peak].sampling_rate
 
     # Adjust the amplitude
-    R_val = sigma_R_fit / 4 if sigma_R_fit > sampling_rate * 20 else sampling_rate * 5
-    L_val = sigma_L_fit / 4 if sigma_L_fit > sampling_rate * 20 else sampling_rate * 5
+    R_val = sigma_R_fit if sigma_R_fit > sampling_rate * 20 else sampling_rate * 5
+    L_val = sigma_L_fit if sigma_L_fit > sampling_rate * 20 else sampling_rate * 5
     mask = (data_x >= x0_fit - R_val) & (data_x <= x0_fit + L_val)
     data_x_peak = data_x[mask]
     data_y_peak = data_y[mask]
@@ -31,7 +31,7 @@ def refine_iteration(
         )
 
     # Sharpen the peak
-    for iteration in range(1, 4):
+    for iteration in range(1, 5):
         min_window = sampling_rate * 3
         L_window = max(sigma_L_fit * iteration, min_window)
         R_window = max(sigma_R_fit * iteration, min_window)
@@ -168,9 +168,6 @@ def refine_iteration(
                             spectrum.peaks[neighbor_idx].sigma_L = (
                                 spectrum.peaks[neighbor_idx].sigma_L * 0.99
                             )
-                        print(
-                            f"Pushed peak {neighbor_idx} away from peak {peak} for better fitting."
-                        )
 
                 # Apply normal width constraints
                 if sigma_L_fit > neighbor_L_median * max_width_ratio:

@@ -373,7 +373,9 @@ def peaks_finder(
 
         # Find the index of maximum intensity in the local region
         local_max_idx = np.argmax(local_region_y)
-        corrected_x0_init = local_region_x[local_max_idx]
+        corrected_x0_init = (
+            local_region_x[local_max_idx] + spectrum.working_data[peak, 0]
+        ) / 2
 
         if use_derivative2nd:
             width = width * 2  # 2nd derivative makes peaks thinner

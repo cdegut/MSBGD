@@ -133,3 +133,40 @@ def standard_error(values: list[float]) -> float:
     sd = np.std(values, ddof=1)  # Sample standard deviation
     se = sd / np.sqrt(n)
     return se
+
+
+def check_theta_convergence(theta_old, theta_new, tol_theta=1e-4, eps=1e-12):
+    """
+    Determine whether local optimization has converged.
+
+    Parameters
+    ----------
+    theta_old : np.ndarray
+        Previous parameter vector (flattened).
+    theta_new : np.ndarray
+        New parameter vector after an iteration.
+    tol_theta : float
+        Relative tolerance on parameter change.
+    eps : float
+        Small constant to avoid division by zero.
+
+    Returns
+    -------
+    converged : bool
+        True if both criteria are satisfied.
+    delta_obj : float
+        Relative change in objective (for logging/debug).
+    delta_theta : float
+        Relative change in parameters (for logging/debug).
+    """
+
+    # Parameter change (normalized L2 norm)
+    # Convert to numpy arrays if needed
+    theta_old = np.asarray(theta_old)
+    theta_new = np.asarray(theta_new)
+    diff = np.linalg.norm(theta_new - theta_old)
+    norm = np.linalg.norm(theta_old) + eps
+    delta_theta = diff / norm
+
+    converged = delta_theta < tol_theta
+    return bool(converged), delta_theta

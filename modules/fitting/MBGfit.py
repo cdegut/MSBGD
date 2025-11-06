@@ -1,8 +1,3 @@
-from ast import Dict
-from dataclasses import dataclass
-import scipy as sp
-from sklearn.linear_model import LinearRegression
-from modules import rendercallback
 from modules.data_structures import (
     FitQualityPeakMetrics,
     MSData,
@@ -17,7 +12,8 @@ from modules.fitting.fitting_quality import (
     advanced_statistical_analysis,
     calculate_fit_quality_metrics,
 )
-from modules.math import bi_gaussian, bi_Lorentzian
+from modules.math import check_theta_convergence
+from modules.fitting.peak_starting_points import update_peak_starting_points
 import numpy as np
 from modules.fitting.refiner import refine_iteration
 from modules.utils import log
@@ -95,7 +91,11 @@ def initial_peaks_parameters(spectrum: MSData, asymmetry=1.8) -> None | list[int
 
 
 def MBG_fit(
-    render_callback, iterations=1000, std=0.25, use_filtered=True, use_gaussian=False
+    render_callback,
+    iterations=1000,
+    theta_threshold=5e-5,
+    use_filtered=True,
+    use_gaussian=False,
 ):
     spectrum = get_global_msdata_ref()
     baseline_window = dpg.get_value("baseline_window")
@@ -126,7 +126,7 @@ def MBG_fit(
         working_peak_list,
         render_callback,
         iterations,
-        std,
+        theta_threshold,
         use_filtered=use_filtered,
         use_gaussian=use_gaussian,
     )
@@ -136,14 +136,14 @@ def MBG_fit(
         log("Error while fitting")
         return
 
-    update_peak_starting_points()
+    update_peak_starting_points(spectrum)
 
 
 def refine_peak_parameters(
     working_peak_list,
     render_callback: RenderCallback,
     iterations=1000,
-    std=0.25,
+    theta_threshold=5e-5,
     use_filtered=True,
     use_gaussian=False,
 ):
@@ -174,9 +174,14 @@ def refine_peak_parameters(
     ##############################
     k = 0
     sigma_L_mean, sigma_R_mean, sigma_L_std, sigma_R_std = -1, -1, -1, -1
+    theta_new = None
+    theta_old = spectrum.get_packed_parameters()
+    delta_theta = 0
+    theta_converged = False
 
     current_metric = 0.0
     for k in range(iterations + 1):
+
         iteration_start = time.time()
         render_callback.execute()
         if dpg.get_value("stop_fitting_checkbox") or render_callback.stop_fitting:
@@ -202,28 +207,25 @@ def refine_peak_parameters(
 
         # Use weighted RMSE for convergence check
         current_metric = quality_metrics.weighted_rmse
-
-        if k > 10:
-            recent_metrics = [q.weighted_rmse for q in quality_history[-10:]]
-            current_std = np.std(recent_metrics)
-        else:
-            current_std = np.inf
         r_squared = quality_metrics.r_squared
+
+        # check for parameter convergence
+        if theta_new is not None:
+            theta_converged, delta_theta = check_theta_convergence(
+                theta_old, theta_new, tol_theta=theta_threshold
+            )
+            theta_old = theta_new
 
         dpg.set_value(
             "Fitting_indicator_text",
-            f"Iter {k}: wRMSE={current_metric:.4f}, R²={r_squared:.4f}, Change in error={current_std:.4f}, iteration time: {time.time() - iteration_start:.2f}s",
+            f"Iter {k}: wRMSE: {current_metric:.4f}, R²: {r_squared:.4f}, Parameters change: {delta_theta:.4e}, iteration time: {time.time() - iteration_start:.2f}s",
         )
 
         r_squared_convergence = dpg.get_value("fitting_r2")
-
         # Check convergence using multiple criteria
-        if k > 10:
-            converged = (
-                current_std < std and r_squared > 0.90
-            ) or r_squared > r_squared_convergence
-            if converged:
-                break
+        converged = theta_converged or r_squared > r_squared_convergence
+        if converged:
+            break
 
         # Shuffle iterations order for next pass
         iterations_list = np.random.permutation(
@@ -240,6 +242,7 @@ def refine_peak_parameters(
                 force_gaussian=use_gaussian,
                 widths=widths,
             )
+        theta_new = spectrum.get_packed_parameters()
 
     ##############################
     # End of iteration loop
@@ -272,6 +275,9 @@ def refine_peak_parameters(
         f"X²r={chi_squared:.3f}, Median peak error={np.median(peaks_error):.4f}, Time: {time_taken:.2f}s",
     )
     render_callback.iterations_done = k
+    render_callback.finishing_delta_theta = (
+        float(delta_theta) if delta_theta is not 0 else 5e-5
+    )
 
     for peak in working_peak_list:
         spectrum.peaks[peak].fitted = True
@@ -296,33 +302,42 @@ def run_advanced_statistical_analysis():
     )
 
     error_bootstrap = advanced_statistical_analysis(
-        spectrum,
-        working_peak_list,
-        data_x,
-        data_y,
-        render_callback,
+        spectrum=spectrum,
+        working_peak_list=working_peak_list,
+        data_x=data_x,
+        data_y=data_y,
+        render_callback=render_callback,
         method="bootstrap-parametric",
-        macro_iteration=200,
+        macro_iteration=512,
         micro_iteration=k,
         check_convergence="theta-gradient",
-        convergence_threshold=quality_metrics.weighted_rmse * 1.05,
+        # wRMSE_threshold=quality_metrics.weighted_rmse * 1.05,
+        theta_threshold=render_callback.finishing_delta_theta * 2,
     )
+
+    if error_bootstrap is False:
+        return
+
     errors_random_start = advanced_statistical_analysis(
         spectrum,
         working_peak_list,
         data_x,
         data_y,
         render_callback,
-        macro_iteration=20,
+        macro_iteration=64,
         micro_iteration=int(k * 1.5),
-        check_convergence="both",
-        convergence_threshold=quality_metrics.weighted_rmse * 1.05,
+        check_convergence="theta-gradient",
+        wRMSE_threshold=quality_metrics.weighted_rmse * 4,
+        theta_threshold=render_callback.finishing_delta_theta * 2,
         method="initial",
     )
 
     # Store standard errors in peak parameters
     for peak in working_peak_list:
-        err_rs = errors_random_start[peak]
+        if errors_random_start is False:
+            err_rs = None
+        else:
+            err_rs = errors_random_start[peak]
         err_bs = error_bootstrap[peak]
         if err_rs is not None and err_bs is not None:
             spectrum.peaks[peak].se_A = max(err_rs["A"], err_bs["A"])
@@ -332,18 +347,21 @@ def run_advanced_statistical_analysis():
             spectrum.peaks[peak].se_integral = max(
                 err_rs["integral"], err_bs["integral"]
             )
+            spectrum.peaks[peak].se_base = max(err_rs["base"], err_bs["base"])
         elif err_rs is not None:
             spectrum.peaks[peak].se_A = err_rs["A"]
             spectrum.peaks[peak].se_x0 = err_rs["x0"]
             spectrum.peaks[peak].se_sigma_L = err_rs["sigma_L"]
             spectrum.peaks[peak].se_sigma_R = err_rs["sigma_R"]
             spectrum.peaks[peak].se_integral = err_rs["integral"]
+            spectrum.peaks[peak].se_base = err_rs["base"]
         elif err_bs is not None:
             spectrum.peaks[peak].se_A = err_bs["A"]
             spectrum.peaks[peak].se_x0 = err_bs["x0"]
             spectrum.peaks[peak].se_sigma_L = err_bs["sigma_L"]
             spectrum.peaks[peak].se_sigma_R = err_bs["sigma_R"]
             spectrum.peaks[peak].se_integral = err_bs["integral"]
+            spectrum.peaks[peak].se_base = err_bs["base"]
         else:
             continue
 
@@ -358,97 +376,3 @@ def update_peak_params(peak_list, popt, spectrum: MSData):
         spectrum.peaks[peak].sigma_R = sigma_R_fit
         spectrum.peaks[peak].fitted = True
         i += 1
-
-
-def update_peak_starting_points():
-    spectrum = get_global_msdata_ref()
-
-    for peak in spectrum.peaks:
-        if not spectrum.peaks[peak].fitted:
-            continue
-
-        A = spectrum.peaks[peak].A_refined
-        apex = spectrum.peaks[peak].x0_refined
-        start = apex
-        sigma_L = spectrum.peaks[peak].sigma_L
-
-        while True:
-            if spectrum.peak_model == "lorentzian":
-                A_current = bi_Lorentzian(
-                    start,
-                    spectrum.peaks[peak].A_refined,
-                    apex,
-                    spectrum.peaks[peak].sigma_L,
-                    spectrum.peaks[peak].sigma_R,
-                )
-            else:
-                A_current = bi_gaussian(
-                    start,
-                    spectrum.peaks[peak].A_refined,
-                    apex,
-                    spectrum.peaks[peak].sigma_L,
-                    spectrum.peaks[peak].sigma_R,
-                )
-            start -= 0.02
-            if A_current <= 0.9 * A:
-                break
-
-        mz80pcs = start
-        print(mz80pcs)
-
-        while True:
-            if spectrum.peak_model == "lorentzian":
-                A_current = bi_Lorentzian(
-                    start,
-                    spectrum.peaks[peak].A_refined,
-                    apex,
-                    spectrum.peaks[peak].sigma_L,
-                    spectrum.peaks[peak].sigma_R,
-                )
-            else:
-                A_current = bi_gaussian(
-                    start,
-                    spectrum.peaks[peak].A_refined,
-                    apex,
-                    spectrum.peaks[peak].sigma_L,
-                    spectrum.peaks[peak].sigma_R,
-                )
-
-            start -= 0.02
-            if A_current <= 0.30 * A:
-                break
-
-        mz25pcs = start
-
-        sample_points = np.linspace(mz80pcs, mz25pcs, 10)
-        mz_samples = []
-        A_samples = []
-
-        for sample_mz in sample_points:
-            if spectrum.peak_model == "lorentzian":
-                A_sample = bi_Lorentzian(
-                    sample_mz,
-                    spectrum.peaks[peak].A_refined,
-                    apex,
-                    spectrum.peaks[peak].sigma_L,
-                    spectrum.peaks[peak].sigma_R,
-                )
-            else:
-                A_sample = bi_gaussian(
-                    sample_mz,
-                    spectrum.peaks[peak].A_refined,
-                    apex,
-                    spectrum.peaks[peak].sigma_L,
-                    spectrum.peaks[peak].sigma_R,
-                )
-            mz_samples.append(sample_mz)
-            A_samples.append(A_sample)
-
-        X = np.array(mz_samples).reshape(-1, 1)
-        y = np.array(A_samples)
-        reg = LinearRegression().fit(X, y)
-
-        a = float(reg.coef_[0])
-        b = float(reg.intercept_)
-
-        spectrum.peaks[peak].regression_fct = (a, b)

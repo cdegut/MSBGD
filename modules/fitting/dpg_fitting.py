@@ -50,6 +50,7 @@ def fitting_window(render_callback):
                     dpg.add_button(
                         label="Quality of fit Analysis",
                         callback=run_advanced_statistical_analysis_callback,
+                        tag="advanced_statistical_analysis_button",
                     )
                     with dpg.group(horizontal=True):
                         dpg.add_checkbox(
@@ -76,9 +77,9 @@ def fitting_window(render_callback):
             dpg.add_loading_indicator(
                 style=5, radius=3, show=False, tag="Fitting_indicator"
             )
-            dpg.add_text("", tag="Fitting_indicator_text")
-
-            dpg.add_text("", tag="Fitting_indicator_sub_text")
+            with dpg.group(horizontal=False, horizontal_spacing=50):
+                dpg.add_text("", tag="Fitting_indicator_text")
+                dpg.add_text("", tag="Fitting_indicator_sub_text")
         with dpg.group(horizontal=True, horizontal_spacing=50):
             with dpg.group(horizontal=False):
                 dpg.add_text("Fitting Iterations:")
@@ -91,14 +92,14 @@ def fitting_window(render_callback):
                     tag="fitting_iterations",
                 )
             with dpg.group(horizontal=False):
-                dpg.add_text("OR residual variation bellow:")
+                dpg.add_text("OR Parameters changes below (*e-5):")
                 dpg.add_input_float(
                     label="",
-                    default_value=0.25,
+                    default_value=5,
+                    step=1,
                     min_value=0.01,
-                    max_value=1,
                     width=200,
-                    tag="fitting_std",
+                    tag="theta_threshold_selector",
                 )
             with dpg.group(horizontal=False):
                 dpg.add_text("OR R2 above:")
