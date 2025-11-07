@@ -1,5 +1,6 @@
 from modules.data_structures import MSData
 import numpy as np
+import dearpygui.dearpygui as dpg
 
 
 def refine_iteration(
@@ -31,7 +32,12 @@ def refine_iteration(
         )
 
     # Sharpen the peak
-    for iteration in range(1, 5):
+    if spectrum.peak_model == "lorentzian":
+        max_iter = 5
+    else:
+        max_iter = 5
+
+    for iteration in range(1, max_iter):
         min_window = sampling_rate * 3
         L_window = max(sigma_L_fit * iteration, min_window)
         R_window = max(sigma_R_fit * iteration, min_window)
@@ -108,18 +114,34 @@ def refine_iteration(
             sigma_L_mean, sigma_R_mean, sigma_L_std, sigma_R_std = widths
 
             # Global regularization
+            global_softness = 0.5  # Adjust between 0 (hard) and 1 (very soft)
+
             if sigma_L_fit > sigma_L_mean + sigma_L_std * factor:
-                sigma_L_fit = sigma_L_fit - sigma_L_std / factor
+                excess = sigma_L_fit - (sigma_L_mean + sigma_L_std * factor)
+                sigma_L_fit = (
+                    sigma_L_mean + sigma_L_std * factor + excess * global_softness
+                )
             if sigma_L_fit < sigma_L_mean - sigma_L_std * factor:
-                sigma_L_fit = sigma_L_fit + sigma_L_std / factor
+                deficit = (sigma_L_mean - sigma_L_std * factor) - sigma_L_fit
+                sigma_L_fit = (
+                    sigma_L_mean - sigma_L_std * factor - deficit * global_softness
+                )
             if sigma_R_fit > sigma_R_mean + sigma_R_std * factor:
-                sigma_R_fit = sigma_R_fit - sigma_R_std / factor
+                excess = sigma_R_fit - (sigma_R_mean + sigma_R_std * factor)
+                sigma_R_fit = (
+                    sigma_R_mean + sigma_R_std * factor + excess * global_softness
+                )
             if sigma_R_fit < sigma_R_mean - sigma_R_std * factor:
-                sigma_R_fit = sigma_R_fit + sigma_R_std / factor
+                deficit = (sigma_R_mean - sigma_R_std * factor) - sigma_R_fit
+                sigma_R_fit = (
+                    sigma_R_mean - sigma_R_std * factor - deficit * global_softness
+                )
 
             # Neighbor-based regularization with push-away mechanism
             max_width_ratio = 1.7
-            neighbor_distance = original_peak_width * 8
+
+            distance_factor = 1.5 if spectrum.peak_model == "lorentzian" else 2.0
+            neighbor_distance = (sigma_L_fit + sigma_R_fit) * 1.5
 
             # Find all neighbors and their distances
             neighbors = []
@@ -154,31 +176,44 @@ def refine_iteration(
                     sigma_L_fit < sigma_L_mean / 2 or sigma_R_fit < sigma_R_mean / 2
                 )
 
-                if needs_space:
-                    # Push away the two closest neighbors slightly
-                    for neighbor in closest_neighbors:
-                        neighbor_idx = neighbor["index"]
-                        if neighbor["x0"] < x0_fit:
-                            # Neighbor is to the left, push it left
-                            spectrum.peaks[neighbor_idx].sigma_R = (
-                                spectrum.peaks[neighbor_idx].sigma_R * 0.99
-                            )
-                        else:
-                            # Neighbor is to the right, push it right
-                            spectrum.peaks[neighbor_idx].sigma_L = (
-                                spectrum.peaks[neighbor_idx].sigma_L * 0.99
-                            )
+                # if needs_space:
+                #     # Push away the two closest neighbors slightly
+                #     for neighbor in closest_neighbors:
+                #         neighbor_idx = neighbor["index"]
+                #         if neighbor["x0"] < x0_fit:
+                #             # Neighbor is to the left, push it left
+                #             spectrum.peaks[neighbor_idx].sigma_R = (
+                #                 spectrum.peaks[neighbor_idx].sigma_R * 0.99
+                #             )
+                #         else:
+                #             # Neighbor is to the right, push it right
+                #             spectrum.peaks[neighbor_idx].sigma_L = (
+                #                 spectrum.peaks[neighbor_idx].sigma_L * 0.99
+                #             )
 
-                # Apply normal width constraints
+                softness = 0.8  # Adjust between 0 (hard) and 1 (very soft)
+
                 if sigma_L_fit > neighbor_L_median * max_width_ratio:
-                    sigma_L_fit = neighbor_L_median * max_width_ratio
+                    excess = sigma_L_fit - neighbor_L_median * max_width_ratio
+                    sigma_L_fit = (
+                        neighbor_L_median * max_width_ratio + excess * softness
+                    )
                 elif sigma_L_fit < neighbor_L_median / max_width_ratio:
-                    sigma_L_fit = neighbor_L_median / max_width_ratio
+                    deficit = neighbor_L_median / max_width_ratio - sigma_L_fit
+                    sigma_L_fit = (
+                        neighbor_L_median / max_width_ratio - deficit * softness
+                    )
 
                 if sigma_R_fit > neighbor_R_median * max_width_ratio:
-                    sigma_R_fit = neighbor_R_median * max_width_ratio
+                    excess = sigma_R_fit - neighbor_R_median * max_width_ratio
+                    sigma_R_fit = (
+                        neighbor_R_median * max_width_ratio + excess * softness
+                    )
                 elif sigma_R_fit < neighbor_R_median / max_width_ratio:
-                    sigma_R_fit = neighbor_R_median / max_width_ratio
+                    deficit = neighbor_R_median / max_width_ratio - sigma_R_fit
+                    sigma_R_fit = (
+                        neighbor_R_median / max_width_ratio - deficit * softness
+                    )
 
         spectrum.peaks[peak].sigma_L = float(sigma_L_fit)
         spectrum.peaks[peak].sigma_R = float(sigma_R_fit)

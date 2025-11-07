@@ -32,7 +32,7 @@ def update_peak_starting_points(spectrum):
                     spectrum.peaks[peak].sigma_R,
                 )
             start -= 0.02
-            if A_current <= 0.9 * A:
+            if A_current <= 0.95 * A:
                 break
 
         mz80pcs = start

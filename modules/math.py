@@ -58,19 +58,6 @@ def bi_Lorentzian(x, amplitude, center, width_left, width_right):
     width_right: half-width at half-maximum for x >= center (right side)
     """
     y = np.zeros_like(x)
-
-    # # Left side (x < center)
-    # mask_left = x < center
-    # y[mask_left] = (
-    #     amplitude * (width_left**2) / ((x[mask_left] - center) ** 2 + width_left**2)
-    # )
-
-    # # Right side (x >= center)
-    # mask_right = x >= center
-    # y[mask_right] = (
-    #     amplitude * (width_right**2) / ((x[mask_right] - center) ** 2 + width_right**2)
-    # )
-
     y += np.where(
         x < center,
         amplitude * (width_left**2) / ((x - center) ** 2 + width_left**2),
@@ -101,7 +88,7 @@ def multi_bi_Lorentzian(x, *params):
     y = np.zeros_like(x, dtype=float)
     for i in range(n_peaks):
         A, x0, width_L, width_R = params[i * 4 : (i + 1) * 4]
-        y += bi_gaussian(x, A, x0, width_L, width_R)
+        y += bi_Lorentzian(x, A, x0, width_L, width_R)
     return y
 
 
