@@ -297,11 +297,15 @@ class peak_params:
     se_x0: float = 0
     se_sigma_L: float = 0
     se_sigma_R: float = 0
+    x0_ema: Optional[float] = None
+    sigma_L_ema: Optional[float] = None
+    sigma_R_ema: Optional[float] = None
+    A_ema: Optional[float] = None
     sampling_rate: float = 0.0
     fitted: bool = False
     integral: float = 0
     se_integral: float = 0
-    start_range: Tuple[float, float] = (0.0, 0.0)
+    start_end: Tuple[float, float] = (0.0, 0.0)
     regression_fct: Tuple[float, float] = (1.0, 0.0)
     se_base: float = 0.0
     do_not_fit: bool = False

@@ -1,6 +1,6 @@
-from operator import call
 import dearpygui.dearpygui as dpg
 from modules.fitting.dpg_callbacks import *
+from modules.fitting.fitting_quality import laplace_covariance_analysis
 
 
 def fitting_window(render_callback):
@@ -51,6 +51,11 @@ def fitting_window(render_callback):
                         label="Quality of fit Analysis",
                         callback=run_advanced_statistical_analysis_callback,
                         tag="advanced_statistical_analysis_button",
+                    )
+                    dpg.add_button(
+                        label="laplace_covariance_analysis",
+                        callback=laplace_covariance_analysis,
+                        tag="laplace_covariance_analysis_button",
                     )
                     with dpg.group(horizontal=True):
                         dpg.add_checkbox(

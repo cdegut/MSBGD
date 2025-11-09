@@ -592,8 +592,11 @@ def print_to_terminal():
 
     for group, peaks in grouped_peaks.items():
         print(f"Mass group {group}: M: {peaks[0]['matched_with'].mw:.2f}")
+        ordered_peaks = sorted(
+            peaks, key=lambda x: x["matched_with"].charge, reverse=True
+        )
         print("Peak:\t\tz:\t\tM/Z:\t\tx0:\t\tIntegral:\t\tIntegralError\t\tBase:")
-        for p in peaks:
+        for p in ordered_peaks:
             print(
                 f"{p['peak']}\t\t{p['matched_with'].charge}\t\t{p['matched_with'].mw/p['matched_with'].charge:.2f}\t\t{p['x0']:.2f}\t\t{p['integral']:.2f}\t\t{p['base']:.2f}\t\t{p['se_integral']:.2f}"
             )

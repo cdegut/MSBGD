@@ -4,11 +4,17 @@ import os
 from typing import Dict, Literal, overload
 import numpy as np
 from sklearn import base
-from modules.data_structures import FitQualityPeakMetrics, MSData, peak_params
+from modules.data_structures import (
+    FitQualityPeakMetrics,
+    MSData,
+    get_global_msdata_ref,
+    peak_params,
+)
 from modules.fitting.peak_starting_points import update_peak_starting_points
 from modules.math import (
     bi_Lorentzian_integral,
     bi_gaussian_integral,
+    multi_bi_gaussian,
     standard_error,
     check_theta_convergence,
 )
@@ -299,24 +305,37 @@ def advanced_statistical_analysis(
                 show=False,
             )
 
-            test_task = _make_bootstrap_task(
-                spectrum=spectrum,
-                working_peak_list=working_peak_list,
-                data_x=data_x,
-                method=method,
-                b=test,
-                y_fitted=y_fitted,
-                wRMSE_threshold=wRMSE_threshold,
-                residuals=residuals,
-                sigma_hat=float(sigma_hat),
-                rescale=rescale,
-                micro_iteration=25,
-                check_convergence=check_convergence,
-                theta_threshold=theta_threshold,
-            )
-            _, _, it = execute_quick_fit(test_task)
+            mini_batch = []
+            for n in range(0, 4):
+                test_task = _make_bootstrap_task(
+                    spectrum=spectrum,
+                    working_peak_list=working_peak_list,
+                    data_x=data_x,
+                    method=method,
+                    b=test,
+                    y_fitted=y_fitted,
+                    wRMSE_threshold=wRMSE_threshold,
+                    residuals=residuals,
+                    sigma_hat=float(sigma_hat),
+                    rescale=rescale,
+                    micro_iteration=25,
+                    check_convergence=check_convergence,
+                    theta_threshold=theta_threshold,
+                )
+                _, _, it = execute_quick_fit(test_task)
+                mini_batch.append(it)
+                print(f"Initial rescale test {test} iteration {n}: {it} iterations")
+            it = int(np.mean(mini_batch))
 
-            if 5 < it > 10:
+            if 5 > it < 10:
+                dpg.set_value(
+                    "Fitting_indicator_sub_text",
+                    (
+                        f"Running initial rescale tests {test}/10 "
+                        + (f"last it: {it} rescale: {rescale:.2f} exiting test now")
+                    ),
+                )
+                print("Exiting initial rescale tests early")
                 break
             if it > 10:
                 rescale = rescale * 0.75
@@ -429,25 +448,13 @@ def advanced_statistical_analysis(
                             dpg.set_value(
                                 "Fitting_indicator_text",
                                 f"Bootstrap: {completed_tasks['count']}/{macro_iteration} "
-                                f"({completed_tasks['successful']} successful)",
+                                f"({completed_tasks['successful']} converged, {completed_tasks['rejected']} rejected)",
                             )
 
                     if fitted_peaks == {}:
                         completed_tasks["rejected"] += 1
                         continue  # Skip failed fits
                     for peak in fitted_peaks:
-                        if spectrum.peak_model == "lorentzian":
-                            integral = bi_Lorentzian_integral(
-                                fitted_peaks[peak].A_refined,
-                                fitted_peaks[peak].sigma_L,
-                                fitted_peaks[peak].sigma_R,
-                            )
-                        else:
-                            integral = bi_gaussian_integral(
-                                fitted_peaks[peak].A_refined,
-                                fitted_peaks[peak].sigma_L,
-                                fitted_peaks[peak].sigma_R,
-                            )
                         perturbation_results[peak].A.append(
                             fitted_peaks[peak].A_refined
                         )
@@ -460,12 +467,15 @@ def advanced_statistical_analysis(
                         perturbation_results[peak].sigma_R.append(
                             fitted_peaks[peak].sigma_R
                         )
-                        perturbation_results[peak].integral.append(integral)
+                        perturbation_results[peak].integral.append(
+                            fitted_peaks[peak].integral
+                        )
                         perturbation_results[peak].base.append(
                             -fitted_peaks[peak].regression_fct[1]
                             / fitted_peaks[peak].regression_fct[0]
                         )
 
+    print("integrals:", perturbation_results[working_peak_list[0]].integral)
     # Compute standard errors from bootstrap distribution
     final_result = {}
     for peak in working_peak_list:
@@ -628,9 +638,9 @@ def quick_fit_model(
                 "\n",
             )
             if (
-                full_quality_metrics.chi_squared_reduced > 1.0
+                full_quality_metrics.chi_squared_reduced > 10.0
                 or full_quality_metrics.r_squared < 0.8
-                or full_quality_metrics.weighted_rmse > wRMSE_threshold
+                or full_quality_metrics.weighted_rmse > wRMSE_threshold * 4
             ):
                 print("Very poor fit detected, rejecting results.")
                 return {}, False, iteration
@@ -658,6 +668,7 @@ def quick_fit_model(
                 working_peaks[peak].sigma_L = sigma_L
                 working_peaks[peak].sigma_R = sigma_R
                 working_peaks[peak].regression_fct = spectrum.peaks[peak].regression_fct
+                working_peaks[peak].integral = spectrum.peaks[peak].integral
 
         return working_peaks, converged, iteration
 
@@ -785,3 +796,154 @@ def _make_initial_refit_task(
     )
 
     return task
+
+
+def laplace_covariance_analysis():
+    spectrum = get_global_msdata_ref()
+    theta_hat = spectrum.get_packed_parameters()
+    x = spectrum.working_data[:, 0]
+    y = spectrum.working_data[:, 1]
+    # --- residuals and jacobian ---
+    residuals = y - multi_bi_gaussian(x, theta_hat)
+    N, P = len(y), len(theta_hat)
+
+    sigma_est = np.sqrt(np.sum(residuals**2) / (N - P))
+
+    # finite-diff Jacobian
+    eps = 1e-6
+    jac = np.zeros((N, P))
+    f0 = multi_bi_gaussian(x, *theta_hat)
+    for j in range(P):
+        dtheta = np.zeros_like(theta_hat)
+        dtheta[j] = eps * max(1.0, abs(theta_hat[j]))
+        f1 = multi_bi_gaussian(x, theta_hat + dtheta)
+        jac[:, j] = (f1 - f0) / dtheta[j]
+
+    # --- Laplace covariance ---
+    JTJ = jac.T @ jac
+    cond_number = np.linalg.cond(JTJ)
+    cov = sigma_est**2 * np.linalg.pinv(JTJ)
+    stderr = np.sqrt(np.diag(cov))
+
+    warnings = []
+    if cond_number > 1e8:
+        warnings.append(f"Ill-conditioned fit: cond(J^T J) = {cond_number:.2e}")
+    if np.any(np.isnan(stderr)) or np.any(stderr > 1e3 * np.abs(theta_hat)):
+        warnings.append(
+            "Unrealistic parameter uncertainties (possible singular Jacobian)"
+        )
+    analyze_laplace_svd(
+        jac,
+        theta_hat,
+        sigma_est,
+        theta_names=[f"p[{i}]" for i in range(P)],
+        verbose=True,
+    )
+
+
+def analyze_laplace_svd(
+    jac,
+    theta_hat,
+    sigma_est,
+    theta_names=None,
+    rcond=None,
+    auto_rcond_factor=1e-8,
+    verbose=True,
+):
+    """
+    Numerically stable Laplace covariance via scaled SVD with truncation.
+
+    Parameters
+    ----------
+    jac : (N, P) ndarray
+        Jacobian matrix of residuals wrt parameters (evaluated at best fit).
+    theta_hat : (P,) ndarray
+        Best-fit parameter vector.
+    sigma_est : float
+        Residual RMS (sqrt(mean(residuals^2)) or equivalent noise estimate).
+    theta_names : list of str, optional
+        Names of parameters for diagnostics.
+    rcond : float or None
+        Relative singular-value cutoff for truncation (fraction of max s).
+        If None, automatically set to auto_rcond_factor.
+    auto_rcond_factor : float
+        Multiplier used if rcond=None; rcond = s[0] * auto_rcond_factor.
+    verbose : bool
+        Print diagnostics and top/bottom singular vector contributors.
+
+    Returns
+    -------
+    results : dict
+        {
+          'stderr'          : 1σ standard errors per parameter,
+          'cov'             : covariance matrix,
+          'scale'           : per-parameter scale factors used,
+          'singular_values' : singular values of scaled JTJ,
+          'effective_rank'  : number kept after truncation,
+          'rcond_used'      : cutoff used,
+          'bad_directions'  : list of (singval, vector) for truncated modes
+        }
+    """
+    N, P = jac.shape
+    if rcond is None:
+        rcond = auto_rcond_factor
+
+    # 1. Scale parameters to O(1)
+    scale = np.abs(theta_hat) + 1e-8
+    J_scaled = jac * scale[None, :]
+
+    # 2. Compute scaled JTJ and its SVD
+    JTJ_s = J_scaled.T @ J_scaled
+    u, s, vh = np.linalg.svd(JTJ_s, full_matrices=True)
+    cond = s[0] / max(s[-1], 1e-30)
+    cutoff = s[0] * rcond
+    keep = s > cutoff
+    eff_rank = np.sum(keep)
+    dropped = np.where(~keep)[0]
+
+    # 3. Construct truncated pseudo-inverse
+    s_inv = np.zeros_like(s)
+    s_inv[keep] = 1.0 / s[keep]
+    JTJ_pinv_s = (vh.T * s_inv) @ u.T
+
+    # 4. Unscale back to original parameter units
+    cov = sigma_est**2 * (JTJ_pinv_s / (scale[:, None] * scale[None, :]))
+    stderr = np.sqrt(np.diag(cov))
+
+    if verbose:
+        print(f"\n=== Laplace-SVD Diagnostics ===")
+        print(f"cond(JTJ_scaled) : {cond:.3e}")
+        print(f"effective rank   : {eff_rank}/{P}")
+        print(f"rcond cutoff     : {rcond:.1e}")
+        print(f"σ_est            : {sigma_est:.3g}")
+        print(f"min/max singular : {s[-1]:.3e}, {s[0]:.3e}")
+        if eff_rank < P:
+            print(f"{P-eff_rank} near-null directions truncated.")
+        else:
+            print("No directions truncated.")
+
+        # Identify top contributors to the worst directions
+        def show_contrib(v, title):
+            idx = np.argsort(np.abs(v))[::-1][:8]
+            print(f"\n  {title}")
+            for i in idx:
+                name = theta_names[i] if theta_names else f"p[{i}]"
+                print(f"    {name:>12s} : {v[i]: .3e}")
+
+        if len(dropped) > 0:
+            for k in dropped[:3]:  # show a few worst directions
+                v = vh.T[:, k]
+                show_contrib(v, f"Truncated mode #{k} (s={s[k]:.3e})")
+        print("=" * 35)
+
+    bad_dirs = [(s[k], vh.T[:, k]) for k in dropped]
+
+    return {
+        "stderr": stderr,
+        "cov": cov,
+        "scale": scale,
+        "singular_values": s,
+        "effective_rank": eff_rank,
+        "rcond_used": rcond,
+        "bad_directions": bad_dirs,
+    }

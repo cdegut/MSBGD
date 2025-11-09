@@ -1,4 +1,5 @@
 import numpy as np
+from scipy.integrate import quad
 
 
 # Define multi-peak bi-Gaussian function
@@ -94,6 +95,39 @@ def multi_bi_Lorentzian(x, *params):
 
 def bi_Lorentzian_integral(A, width_L, width_R):
     return A * np.pi * (width_L + width_R)
+
+
+def bi_Lorentzian_integral_numerical(A, width_L, width_R, start, end):
+    """
+    Numerically integrate the bi-Lorentzian function from start to end.
+
+    Parameters
+    ----------
+    A : float
+        Amplitude at the center
+    width_L : float
+        Left width (HWHM for x < center)
+    width_R : float
+        Right width (HWHM for x >= center)
+    start : float
+        Lower integration limit
+    end : float
+        Upper integration limit
+
+    Returns
+    -------
+    float
+        Numerical integral of the bi-Lorentzian over [start, end]
+    """
+
+    # Assume center is at x=0 for integration
+    center = 0.0
+
+    def integrand(x):
+        return bi_Lorentzian(x, A, center, width_L, width_R)
+
+    result, _ = quad(integrand, start, end)
+    return result
 
 
 def standard_error(values: list[float]) -> float:

@@ -178,6 +178,8 @@ def refine_peak_parameters(
     theta_old = spectrum.get_packed_parameters()
     delta_theta = 0
     theta_converged = False
+    metric_history = []
+    oscillation_detected = False
 
     current_metric = 0.0
     for k in range(iterations + 1):
@@ -208,6 +210,16 @@ def refine_peak_parameters(
         # Use weighted RMSE for convergence check
         current_metric = quality_metrics.weighted_rmse
         r_squared = quality_metrics.r_squared
+        metric_history.append(current_metric)
+
+        if len(metric_history) >= 4:
+            recent = metric_history[-4:]
+            if (
+                recent[0] < recent[1] > recent[2] < recent[3]
+                or recent[0] > recent[1] < recent[2] > recent[3]
+            ):
+                oscillation_detected = True
+                print("Oscillation detected in fitting metrics")
 
         # check for parameter convergence
         if theta_new is not None:
@@ -220,12 +232,26 @@ def refine_peak_parameters(
             "Fitting_indicator_text",
             f"Iter {k}: wRMSE: {current_metric:.4f}, R²: {r_squared:.4f}, Parameters change: {delta_theta:.4e}, iteration time: {time.time() - iteration_start:.2f}s",
         )
-
+        alpha_convergence = 0.95
         r_squared_convergence = dpg.get_value("fitting_r2")
         # Check convergence using multiple criteria
         converged = theta_converged or r_squared > r_squared_convergence
         if converged:
             break
+
+        if oscillation_detected:
+            alpha_convergence = 0.4
+        # elif k < 25:
+        #     alpha_convergence = 0.95
+        # elif k < 50:
+        #     alpha_convergence = 0.7
+        # elif k < 100:
+        #     alpha_convergence = 0.5
+
+        if len(metric_history) >= 5 and oscillation_detected:
+            recent = metric_history[-5:]
+            if all(recent[i] >= recent[i + 1] for i in range(4)):  # Monotonic decrease
+                oscillation_detected = False
 
         # Shuffle iterations order for next pass
         iterations_list = np.random.permutation(
@@ -234,13 +260,14 @@ def refine_peak_parameters(
         for i in iterations_list:
             peak = working_peak_list[i]
             refine_iteration(
-                peak,
-                data_x,
-                data_y,
-                spectrum,
-                original_peaks[peak].width,
+                peak=peak,
+                data_x=data_x,
+                data_y=data_y,
+                spectrum=spectrum,
+                original_peak_width=original_peaks[peak].width,
                 force_gaussian=use_gaussian,
                 widths=widths,
+                alpha=alpha_convergence,
             )
         theta_new = spectrum.get_packed_parameters()
 
@@ -309,9 +336,9 @@ def run_advanced_statistical_analysis():
         render_callback=render_callback,
         method="bootstrap-parametric",
         macro_iteration=512,
-        micro_iteration=k,
+        micro_iteration=30,
         check_convergence="theta-gradient",
-        # wRMSE_threshold=quality_metrics.weighted_rmse * 1.05,
+        wRMSE_threshold=quality_metrics.weighted_rmse * 1.05,
         theta_threshold=render_callback.finishing_delta_theta * 2,
     )
 
@@ -327,7 +354,7 @@ def run_advanced_statistical_analysis():
         macro_iteration=64,
         micro_iteration=int(k * 1.5),
         check_convergence="theta-gradient",
-        wRMSE_threshold=quality_metrics.weighted_rmse * 4,
+        wRMSE_threshold=quality_metrics.weighted_rmse * 1.1,
         theta_threshold=render_callback.finishing_delta_theta * 2,
         method="initial",
     )

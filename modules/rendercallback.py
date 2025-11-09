@@ -76,11 +76,7 @@ class RenderCallback:
                 self.spectrum.baseline_corrected[:, 1].tolist(),
             ],
         )
-        dpg.set_axis_limits(
-            "y_axis_plot2",
-            min(self.spectrum.baseline_corrected[:, 1]) - 1,
-            max(self.spectrum.baseline_corrected[:, 1]),
-        )
+        dpg.fit_axis_data("y_axis_plot2")
 
     def display_2nd_derivative(self):
         if not dpg.get_value("show_smoothed_data_checkbox"):

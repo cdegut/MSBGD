@@ -7,6 +7,7 @@ from modules.matching import redraw_blocks
 from modules.rendercallback import RenderCallback
 from modules.data_structures import MSData, get_global_msdata_ref
 from modules.math import (
+    bi_Lorentzian_integral_numerical,
     bi_gaussian,
     bi_gaussian_integral,
     bi_Lorentzian,
@@ -267,6 +268,8 @@ def update_peak_table(spectrum: MSData):
         sigma_L = spectrum.peaks[peak].sigma_L
         sigma_R = spectrum.peaks[peak].sigma_R
         A_refined = spectrum.peaks[peak].A_refined
+        start = spectrum.peaks[peak].start_end[0]
+        end = spectrum.peaks[peak].start_end[1]
 
         if spectrum.peak_model == "lorentzian":
             integral = bi_Lorentzian_integral(A_refined, sigma_L, sigma_R)
